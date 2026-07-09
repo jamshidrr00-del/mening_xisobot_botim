@@ -16,7 +16,6 @@ def run_web():
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
 
-# Veb serverni alohida fonda ishga tushirish
 t = Thread(target=run_web)
 t.start()
 # ------------------------------------------------
@@ -62,10 +61,15 @@ def report(message):
     jami = 0
 
     for joy, summa in data[today].items():
-        text += f"{joy} — {sum(summa)} so‘m\n"
-        jami += sum(summa)
+        total_joy_sum = sum(summa)
+        # Raqamni nuqta bilan ajratib formatlash (Masalan: 2.203.000)
+        formatted_sum = f"{total_joy_sum:,}".replace(",", ".")
+        text += f"{joy} — {formatted_sum} so‘m\n"
+        jami += total_joy_sum
 
-    text += f"\n————————\nJAMI: {jami} so‘m"
+    # Umumiy summani ham formatlash
+    formatted_jami = f"{jami:,}".replace(",", ".")
+    text += f"\n————————\nJAMI: {formatted_jami} so‘m"
     bot.reply_to(message, text)
 
 @bot.message_handler(commands=['tozalash'])
@@ -101,9 +105,11 @@ def add_expense(message):
     data[today][joy].append(summa)
     save_data(data)
 
+    # Xarajat saqlanganda ham javob xabarida chiroyli ko'rinishi uchun
+    formatted_summa = f"{summa:,}".replace(",", ".")
     bot.reply_to(
         message,
-        f"✅ Saqlandi:\n{joy} +{summa} so‘m"
+        f"✅ Saqlandi:\n{joy} +{formatted_summa} so‘m"
     )
 
 print("Bot ishga tushdi...")
