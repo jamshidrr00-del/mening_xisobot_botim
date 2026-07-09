@@ -2,6 +2,24 @@ import telebot
 import json
 import os
 from datetime import date
+from flask import Flask
+from threading import Thread
+
+# --- RENDER UCHUN MITTI VEB-SAYT (PORT OCHISH) ---
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot onlayn va ishlayapti!"
+
+def run_web():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
+
+# Veb serverni alohida fonda ishga tushirish
+t = Thread(target=run_web)
+t.start()
+# ------------------------------------------------
 
 TOKEN = os.getenv("TOKEN")
 bot = telebot.TeleBot(TOKEN)
