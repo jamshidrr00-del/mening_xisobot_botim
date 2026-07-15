@@ -30,7 +30,6 @@ TASHKENT_TZ = pytz.timezone('Asia/Tashkent')
 def init_db():
     conn = sqlite3.connect('expenses.db')
     cursor = conn.cursor()
-    # Asosiy jadval
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS expenses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,11 +41,10 @@ def init_db():
             is_closed INTEGER DEFAULT 0
         )
     ''')
-    # Agar eski bazada 'item_name' ustuni bo'lmasa, uni qo'shish (Xatolik bermasligi uchun)
     try:
         cursor.execute("ALTER TABLE expenses ADD COLUMN item_name TEXT")
     except sqlite3.OperationalError:
-        pass  # Ustun allaqachon mavjud bo'lsa, o'tib ketadi
+        pass  # Ustun mavjud bo'lsa xato bermaydi
         
     conn.commit()
     conn.close()
@@ -69,10 +67,11 @@ async def cmd_start(message: types.Message):
         return
     await message.answer("Salom! Men sizning yangilangan aqlli Kunlik Xarajatlar botingizman.\n\n"
                          "📝 Xarajatlarni kiritish uchun masalan:\n"
-                         "`olma 5000` yoki `benzin 55000` deb yozib yuboring.\n\n"
+                         "`olma 5000` yoki `benzin 55000` deb yozib yuboring.\n"
+                         "Bir nechta xarajatni qator-qator qilib bitta xabarda yuborishingiz ham mumkin.\n\n"
                          "📊 Qo'lda hisobot olish uchun: /hisobot")
 
-# Xabar kelganda matn va raqamni ajratib olish
+# Xabar kelganda qatorlarni alohida qayta ishlash
 @dp.message(F.text)
 async def process_expense_input(message: types.Message):
     if message.from_user.id != USER_ID:
@@ -84,47 +83,53 @@ async def process_expense_input(message: types.Message):
     if text.startswith('/'):
         return
 
-    # Matn ichidan barcha raqamlarni qidirish
-    numbers = re.findall(r'\d+', text)
-
-    if not numbers:
-        await message.answer("Iltimos, xarajat summasini raqamda kiriting.\nMasalan: `olma 5000` yoki shunchaki `5000`")
-        return
-
-    # Oxirgi topilgan raqamni summa deb olamiz (masalan, "olma 5000" -> 5000)
-    amount = int(numbers[-1])
-    
-    # Raqamni olib tashlab, qolgan matnni xarajat nomi deb olamiz
-    item_name = text.replace(str(amount), "").strip()
-    if not item_name:
-        item_name = "Xarajat"
-
+    # Xabarni qatorlarga ajratamiz
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
     current_date = datetime.now(TASHKENT_TZ).strftime("%Y-%m-%d")
 
-    # Ma'lumotni vaqtinchalik 'DRAFT' holatida saqlaymiz
-    conn = sqlite3.connect('expenses.db')
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO expenses (user_id, amount, item_name, category, date) VALUES (?, ?, ?, ?, ?)",
-        (message.from_user.id, amount, item_name, "DRAFT", current_date)
-    )
-    draft_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
+    for line in lines:
+        # Har bir qatordan raqamlarni qidiramiz
+        numbers = re.findall(r'\d+', line)
 
-    # Kategoriya tanlash tugmalari
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=name, callback_data=f"set_{draft_id}_{key}")]
-        for key, name in CATEGORIES.items()
-    ])
+        if not numbers:
+            await message.answer(f"⚠️ '{line}' qatorida xarajat summasi (raqam) topilmadi.")
+            continue
 
-    await message.answer(
-        f"📝 *Xarajat:* {item_name}\n"
-        f"💰 *Summa:* {amount:,} so'm\n\n"
-        f"Ushbu xarajat uchun kategoriya tanlang:", 
-        reply_markup=keyboard, 
-        parse_mode="Markdown"
-    )
+        # Qatordagi oxirgi raqamni summa deb olamiz
+        amount = int(numbers[-1])
+        
+        # Raqamni olib tashlab, qolgan matnni tozalab nom qilib olamiz
+        item_name = line.replace(str(amount), "").strip()
+        # Keraksiz belgilarni (-, :, +) tozalash
+        item_name = re.sub(r'^[ \t\r\n\-\:\=\+]+|[ \t\r\n\-\:\=\+]+$', '', item_name).strip()
+        
+        if not item_name:
+            item_name = "Xarajat"
+
+        # Bazaga vaqtinchalik saqlash
+        conn = sqlite3.connect('expenses.db')
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO expenses (user_id, amount, item_name, category, date) VALUES (?, ?, ?, ?, ?)",
+            (message.from_user.id, amount, item_name, "DRAFT", current_date)
+        )
+        draft_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+
+        # Kategoriya tugmalari
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=name, callback_data=f"set_{draft_id}_{key}")]
+            for key, name in CATEGORIES.items()
+        ])
+
+        await message.answer(
+            f"📝 *Xarajat:* {item_name}\n"
+            f"💰 *Summa:* {amount:,} so'm\n\n"
+            f"Ushbu xarajat uchun kategoriya tanlang:", 
+            reply_markup=keyboard, 
+            parse_mode="Markdown"
+        )
 
 # Kategoriya tanlanganda bazani yangilash
 @dp.callback_query(F.data.startswith("set_"))
@@ -135,13 +140,11 @@ async def save_expense_category(callback: types.CallbackQuery):
     conn = sqlite3.connect('expenses.db')
     cursor = conn.cursor()
     
-    # Loyiha tafsilotlarini bazadan o'qiymiz
     cursor.execute("SELECT amount, item_name, date FROM expenses WHERE id = ?", (draft_id,))
     row = cursor.fetchone()
     
     if row:
         amount, item_name, current_date = row
-        # 'DRAFT'ni haqiqiy kategoriyaga o'zgartiramiz
         cursor.execute("UPDATE expenses SET category = ? WHERE id = ?", (category_name, draft_id))
         conn.commit()
         
@@ -159,19 +162,17 @@ async def save_expense_category(callback: types.CallbackQuery):
     conn.close()
     await callback.answer()
 
-# Hisobot matnini chiroyli guruhlab tayyorlash funksiyasi
+# Hisobot matnini chiroyli guruhlash
 def generate_report_text(date_str):
     conn = sqlite3.connect('expenses.db')
     cursor = conn.cursor()
 
-    # Tasdiqlangan xarajatlarni olish (DRAFT bo'lmaganlarini)
     cursor.execute(
         "SELECT category, item_name, amount FROM expenses WHERE date = ? AND category != 'DRAFT'",
         (date_str,)
     )
     rows = cursor.fetchall()
 
-    # Umumiy summani hisoblash
     cursor.execute(
         "SELECT SUM(amount) FROM expenses WHERE date = ? AND category != 'DRAFT'",
         (date_str,)
@@ -182,14 +183,13 @@ def generate_report_text(date_str):
     if total == 0:
         return f"📅 {date_str} kuni hech qanday xarajat kiritilmadi. 🤝"
 
-    # Kategoriyalar bo'yicha guruhlash (Python orqali)
+    # Python orqali guruhlash
     grouped = {}
     for cat, item, amt in rows:
         if cat not in grouped:
             grouped[cat] = []
         grouped[cat].append((item, amt))
 
-    # Hisobot matnini yig'ish
     report = f"📊 **Kunlik Xarajatlar Hisoboti**\n📅 Sana: {date_str}\n"
     report += "-----------------------------\n"
     
@@ -202,7 +202,7 @@ def generate_report_text(date_str):
     report += f"💰 **JAMI:** {total:,} so'm"
     return report
 
-# Qo'lda hisobot so'ralganda
+# Qo'lda hisobot olish
 @dp.message(Command("hisobot"))
 async def cmd_report(message: types.Message):
     if message.from_user.id != USER_ID:
@@ -211,14 +211,13 @@ async def cmd_report(message: types.Message):
     report_text = generate_report_text(current_date)
     await message.answer(report_text, parse_mode="Markdown")
 
-# Har kuni soat 22:00 da avtomatik ishlaydigan va kunni yopadigan funksiya
+# Avtomatik hisobot (22:00)
 async def auto_daily_report():
     current_date = datetime.now(TASHKENT_TZ).strftime("%Y-%m-%d")
 
     conn = sqlite3.connect('expenses.db')
     cursor = conn.cursor()
 
-    # Yopilmagan va tasdiqlangan xarajatlar bormi tekshiramiz
     cursor.execute(
         "SELECT COUNT(*) FROM expenses WHERE date = ? AND is_closed = 0 AND category != 'DRAFT'",
         (current_date,)
@@ -226,29 +225,25 @@ async def auto_daily_report():
     open_expenses = cursor.fetchone()[0]
 
     if open_expenses > 0:
-        # Hisobot tayyorlab yuborish
         report_text = "⏰ **Soat 22:00 bo'ldi! Kunlik avtomat hisobot:**\n\n" + generate_report_text(current_date)
         try:
             await bot.send_message(chat_id=USER_ID, text=report_text, parse_mode="Markdown")
-            # Kunni yopilgan deb belgilaymiz
             cursor.execute(
                 "UPDATE expenses SET is_closed = 1 WHERE date = ? AND category != 'DRAFT'",
                 (current_date,)
             )
-            # Tasdiqlanmay chala qolib ketgan "DRAFT" xarajatlarni tozalaymiz
+            # Chala qolgan loyihalarni tozalash
             cursor.execute("DELETE FROM expenses WHERE category = 'DRAFT'")
             conn.commit()
         except Exception as e:
-            logging.error(f"Avtomat hisobot yuborishda xato: {e}")
+            logging.error(f"Avtomat hisobotda xatolik: {e}")
             
     conn.close()
 
-# Botni ishga tushirish
+# Ishga tushirish
 async def main():
-    # Taymerni sozlash (Har kuni 22:00 da)
     scheduler.add_job(auto_daily_report, 'cron', hour=22, minute=0, timezone=TASHKENT_TZ)
     scheduler.start()
-    
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
