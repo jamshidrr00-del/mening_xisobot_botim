@@ -1,116 +1,53 @@
-import telebot
-import json
-import os
-from datetime import date
+import logging
+import asyncio
+import threading
 from flask import Flask
-from threading import Thread
+from aiogram import Bot, Dispatcher
+from config import TOKEN, PORT
+from app.database.db import init_db
+from app.handlers.user import user_router
 
-# --- RENDER UCHUN MITTI VEB-SAYT (PORT OCHISH) ---
+# Loglarni sozlash (Xatolar va ishlash jarayonini ko'rsatib turadi)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+# Flask ilovasi (Render portni yopib qo'ymasligi va 24/7 ishlashi uchun)
 app = Flask(__name__)
 
 @app.route('/')
-def home():
-    return "Bot onlayn va ishlayapti!"
+def index():
+    return "Expense Tracker Bot is running 24/7! 🚀"
 
-def run_web():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+def run_flask():
+    """Flask serverni alohida oqimda (thread) yurgizish"""
+    app.run(host="0.0.0.0", port=PORT)
 
-t = Thread(target=run_web)
-t.start()
-# ------------------------------------------------
+async def main():
+    """Aiogram 3 botni ishga tushirish"""
+    # 1. Baza jadvallarini yaratish (agar yo'q bo'lsa)
+    init_db()
+    logging.info("Ma'lumotlar bazasi tekshirildi va tayyor.")
 
-TOKEN = os.getenv("TOKEN")
-bot = telebot.TeleBot(TOKEN)
-DATA_FILE = "data.json"
+    # 2. Bot va Dispatcher sozlamalari
+    # Diqqat: .env dagi TOKEN olinadi (Xavfsizlik)
+    bot = Bot(token=TOKEN)
+    dp = Dispatcher()
 
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        return {}
-    with open(DATA_FILE, "r") as f:
-        return json.load(f)
+    # 3. Routerlarni (handlerlarni) ulaymiz
+    dp.include_router(user_router)
 
-def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+    # 4. Polling orqali botni yurgizish
+    logging.info("Telegram bot ishga tushdi...")
+    # Bot o'chib qolgan paytda kelgan xabarlarni o'tkazib yuborish
+    await bot.delete_webhook(drop_pending_updates=True) 
+    await dp.start_polling(bot)
 
-@bot.message_handler(commands=['start'])
-def start(message):
-    text = (
-        "📊 Kunlik hisob botiga xush kelibsiz!\n\n"
-        "Yozish formati:\n"
-        "JOY SUMMA\n\n"
-        "Misol:\n"
-        "Bozor 15000\n\n"
-        "Buyruqlar:\n"
-        "/hisobot — bugungi hisob\n"
-        "/tozalash — kunni yopish"
-    )
-    bot.reply_to(message, text)
-
-@bot.message_handler(commands=['hisobot'])
-def report(message):
-    data = load_data()
-    today = str(date.today())
-
-    if today not in data or not data[today]:
-        bot.reply_to(message, "Bugun hali ma’lumot yo‘q ❌")
-        return
-
-    text = "📅 Bugungi hisobot:\n\n"
-    jami = 0
-
-    for joy, summa in data[today].items():
-        total_joy_sum = sum(summa)
-        # Raqamni nuqta bilan ajratib formatlash (Masalan: 2.203.000)
-        formatted_sum = f"{total_joy_sum:,}".replace(",", ".")
-        text += f"{joy} — {formatted_sum} so‘m\n"
-        jami += total_joy_sum
-
-    # Umumiy summani ham formatlash
-    formatted_jami = f"{jami:,}".replace(",", ".")
-    text += f"\n————————\nJAMI: {formatted_jami} so‘m"
-    bot.reply_to(message, text)
-
-@bot.message_handler(commands=['tozalash'])
-def clear(message):
-    data = load_data()
-    today = str(date.today())
-
-    if today in data:
-        del data[today]
-        save_data(data)
-        bot.reply_to(message, "✅ Bugungi hisob yopildi, ma’lumotlar tozalandi")
-    else:
-        bot.reply_to(message, "Bugun uchun ma’lumot yo‘q")
-
-@bot.message_handler(func=lambda m: True)
-def add_expense(message):
+if __name__ == "__main__":
+    # Flask serverni orqa fonda ishga tushiramiz
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.start()
+    
+    # Aiogram botni asosiy oqimda ishga tushiramiz
     try:
-        joy, summa = message.text.rsplit(" ", 1)
-        summa = int(summa)
-    except Exception:
-        bot.reply_to(message, "❌ Format xato\nMisol: Bozor 15000")
-        return
-
-    data = load_data()
-    today = str(date.today())
-
-    if today not in data:
-        data[today] = {}
-
-    if joy not in data[today]:
-        data[today][joy] = []
-
-    data[today][joy].append(summa)
-    save_data(data)
-
-    # Xarajat saqlanganda ham javob xabarida chiroyli ko'rinishi uchun
-    formatted_summa = f"{summa:,}".replace(",", ".")
-    bot.reply_to(
-        message,
-        f"✅ Saqlandi:\n{joy} +{formatted_summa} so‘m"
-    )
-
-print("Bot ishga tushdi...")
-bot.infinity_polling()
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logging.info("Bot to'xtatildi.")
