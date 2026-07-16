@@ -75,3 +75,42 @@ async def process_expense_input(message: types.Message):
         f"📅 Vaqt: {current_date} {current_time}",
         parse_mode="Markdown"
     )
+# 📊 Hisobot tugmasi uchun handler
+@user_router.message(F.text == "📊 Hisobot")
+async def process_report(message: types.Message):
+    tz = pytz.timezone(TIMEZONE)
+    today = datetime.now(tz).strftime("%Y-%m-%d")
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Bugungi barcha xarajatlarni olish
+    cursor.execute("SELECT category, item_name, amount FROM expenses WHERE user_id = ? AND date = ?", 
+                   (message.from_user.id, today))
+    rows = cursor.fetchall()
+    
+    cursor.execute("SELECT SUM(amount) FROM expenses WHERE user_id = ? AND date = ?", 
+                   (message.from_user.id, today))
+    total = cursor.fetchone()[0] or 0
+    conn.close()
+    
+    if not rows:
+        await message.answer("📅 Bugun hali hech qanday xarajat kiritilmadi.")
+        return
+        
+    # Natijani chiroyli formatlash
+    report_text = f"📊 **Bugungi hisobot** ({today})\n\n"
+    
+    # Kategoriyalar bo'yicha guruhlash
+    grouped = {}
+    for cat, item, amt in rows:
+        if cat not in grouped: grouped[cat] = []
+        grouped[cat].append(f"{item} — {amt:,} so'm")
+    
+    for cat, items in grouped.items():
+        report_text += f"{cat}:\n"
+        report_text += "\n".join([f" • {i}" for i in items]) + "\n\n"
+        
+    report_text += f"━━━━━━━━━━\n💰 **Jami: {total:,} so'm**"
+    
+    await message.answer(report_text, parse_mode="Markdown")
