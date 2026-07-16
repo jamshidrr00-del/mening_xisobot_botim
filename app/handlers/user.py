@@ -28,17 +28,12 @@ async def process_settings(message: types.Message):
 async def process_back(message: types.Message):
     await message.answer("Asosiy menyuga qaytdik 🏠", reply_markup=get_main_menu())
 
-# FOYDALANUVCHI XARAJAT YOZGANDA ISHLAYDIGAN ASOSIY FUNKSIYA
-@user_router.message(F.text)
+# Tugmalarni xarajat deb qabul qilmasligi uchun filtr
+@user_router.message(F.text.notin_({"📊 Hisobot", "📆 Haftalik", "📅 Oylik", "📂 Arxiv", "⚙️ Sozlamalar", "⬅️ Ortga"}))
 async def process_expense_input(message: types.Message):
     text = message.text.strip()
+    # ... qolgan kod o'zgarmaydi
     
-    # Boshqa menyu tugmalarini vaqtincha bloklash
-    ignore_list = ["➕ Xarajat", "📊 Hisobot", "📆 Haftalik", "📅 Oylik", "📂 Arxiv"]
-    if text in ignore_list:
-        await message.answer(f"Hozircha *{text}* bo'limi tayyorlanmoqda 🛠", parse_mode="Markdown")
-        return
-
     # 1. Matnni xizmat orqali aqlli tahlil qilish
     parsed_data = parse_expense_text(text)
     
