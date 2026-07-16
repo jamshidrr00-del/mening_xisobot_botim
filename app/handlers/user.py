@@ -10,6 +10,7 @@ from config import DB_PATH, TIMEZONE
 
 user_router = Router()
 
+# 1. COMMANDS
 @user_router.message(CommandStart())
 async def cmd_start(message: types.Message):
     full_name = message.from_user.full_name
@@ -20,6 +21,7 @@ async def cmd_start(message: types.Message):
         reply_markup=get_main_menu()
     )
 
+# 2. SPECIFIC BUTTON HANDLERS (Tepada turishi shart)
 @user_router.message(F.text == "⚙️ Sozlamalar")
 async def process_settings(message: types.Message):
     await message.answer("⚙️ Sozlamalar bo'limidasiz. Nima o'zgartiramiz?", reply_markup=get_settings_menu())
@@ -28,49 +30,6 @@ async def process_settings(message: types.Message):
 async def process_back(message: types.Message):
     await message.answer("Asosiy menyuga qaytdik 🏠", reply_markup=get_main_menu())
 
-# Tugmalarni xarajat deb qabul qilmasligi uchun filtr
-@user_router.message(F.text.notin_({"📊 Hisobot", "📆 Haftalik", "📅 Oylik", "📂 Arxiv", "⚙️ Sozlamalar", "⬅️ Ortga"}))
-async def process_expense_input(message: types.Message):
-    text = message.text.strip()
-    # ... qolgan kod o'zgarmaydi
-    
-    # 1. Matnni xizmat orqali aqlli tahlil qilish
-    parsed_data = parse_expense_text(text)
-    
-    if not parsed_data:
-        await message.answer("⚠️ Iltimos, xarajat summasini raqamda kiriting.\nMasalan: `Non 18000` yoki `Taxi 30000`")
-        return
-        
-    item_name = parsed_data['item_name']
-    amount = parsed_data['amount']
-    category = parsed_data['category']
-    
-    # 2. Vaqt va sanani olish (Toshkent vaqti bilan)
-    tz = pytz.timezone(TIMEZONE)
-    now = datetime.now(tz)
-    current_date = now.strftime("%Y-%m-%d")
-    current_time = now.strftime("%H:%M")
-    
-    # 3. Ma'lumotni Bazaga xavfsiz saqlash
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO expenses (user_id, amount, item_name, category, date, time) VALUES (?, ?, ?, ?, ?, ?)",
-        (message.from_user.id, amount, item_name, category, current_date, current_time)
-    )
-    conn.commit()
-    conn.close()
-    
-    # 4. Foydalanuvchiga chiroyli tasdiq yuborish
-    await message.answer(
-        f"✅ **Xarajat saqlandi!**\n\n"
-        f"📝 Nomi: {item_name}\n"
-        f"💰 Summa: {amount:,} so'm\n"
-        f"🗂 Kategoriya: {category}\n"
-        f"📅 Vaqt: {current_date} {current_time}",
-        parse_mode="Markdown"
-    )
-# 📊 Hisobot tugmasi uchun handler
 @user_router.message(F.text == "📊 Hisobot")
 async def process_report(message: types.Message):
     tz = pytz.timezone(TIMEZONE)
@@ -79,7 +38,6 @@ async def process_report(message: types.Message):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Bugungi barcha xarajatlarni olish
     cursor.execute("SELECT category, item_name, amount FROM expenses WHERE user_id = ? AND date = ?", 
                    (message.from_user.id, today))
     rows = cursor.fetchall()
@@ -93,10 +51,8 @@ async def process_report(message: types.Message):
         await message.answer("📅 Bugun hali hech qanday xarajat kiritilmadi.")
         return
         
-    # Natijani chiroyli formatlash
     report_text = f"📊 **Bugungi hisobot** ({today})\n\n"
     
-    # Kategoriyalar bo'yicha guruhlash
     grouped = {}
     for cat, item, amt in rows:
         if cat not in grouped: grouped[cat] = []
@@ -109,3 +65,42 @@ async def process_report(message: types.Message):
     report_text += f"━━━━━━━━━━\n💰 **Jami: {total:,} so'm**"
     
     await message.answer(report_text, parse_mode="Markdown")
+
+# 3. GENERAL INPUT HANDLER (Eng pastda turishi shart)
+@user_router.message(F.text)
+async def process_expense_input(message: types.Message):
+    text = message.text.strip()
+    
+    # Matnni tahlil qilish
+    parsed_data = parse_expense_text(text)
+    
+    if not parsed_data:
+        await message.answer("⚠️ Iltimos, xarajat summasini raqamda kiriting.\nMasalan: `Non 18000` yoki `Taxi 30000`")
+        return
+        
+    item_name = parsed_data['item_name']
+    amount = parsed_data['amount']
+    category = parsed_data['category']
+    
+    tz = pytz.timezone(TIMEZONE)
+    now = datetime.now(tz)
+    current_date = now.strftime("%Y-%m-%d")
+    current_time = now.strftime("%H:%M")
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO expenses (user_id, amount, item_name, category, date, time) VALUES (?, ?, ?, ?, ?, ?)",
+        (message.from_user.id, amount, item_name, category, current_date, current_time)
+    )
+    conn.commit()
+    conn.close()
+    
+    await message.answer(
+        f"✅ **Xarajat saqlandi!**\n\n"
+        f"📝 Nomi: {item_name}\n"
+        f"💰 Summa: {amount:,} so'm\n"
+        f"🗂 Kategoriya: {category}\n"
+        f"📅 Vaqt: {current_date} {current_time}",
+        parse_mode="Markdown"
+    )
