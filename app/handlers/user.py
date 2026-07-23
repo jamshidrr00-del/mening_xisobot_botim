@@ -10,7 +10,6 @@ from config import DB_PATH, TIMEZONE
 
 user_router = Router()
 
-# 1. COMMANDS
 @user_router.message(CommandStart())
 async def cmd_start(message: types.Message):
     full_name = message.from_user.full_name
@@ -21,7 +20,6 @@ async def cmd_start(message: types.Message):
         reply_markup=get_main_menu()
     )
 
-# 2. SPECIFIC BUTTON HANDLERS (Tepada turishi shart)
 @user_router.message(F.text == "⚙️ Sozlamalar")
 async def process_settings(message: types.Message):
     await message.answer("⚙️ Sozlamalar bo'limidasiz. Nima o'zgartiramiz?", reply_markup=get_settings_menu())
@@ -66,22 +64,19 @@ async def process_report(message: types.Message):
     
     await message.answer(report_text, parse_mode="Markdown")
 
-# 3. GENERAL INPUT HANDLER (Eng pastda turishi shart)
+# FOYDALANUVCHI XARAJAT YOZGANDA ISHLAYDIGAN ASOSIY FUNKSIYA
 @user_router.message(F.text)
 async def process_expense_input(message: types.Message):
     text = message.text.strip()
     
-    # Matnni tahlil qilish
-    parsed_data = parse_expense_text(text)
+    # 1. Matnni xizmat orqali aqlli tahlil qilish (endi u ro'yxat qaytaradi)
+    parsed_items = parse_expense_text(text)
     
-    if not parsed_data:
-        await message.answer("⚠️ Iltimos, xarajat summasini raqamda kiriting.\nMasalan: `Non 18000` yoki `Taxi 30000`")
+    if not parsed_items:
+        await message.answer("⚠️ Iltimos, xarajatni to'g'ri kiriting.\nMasalan:\n`Non 18000`\n`Gril 4 ta 62000`")
         return
         
-    item_name = parsed_data['item_name']
-    amount = parsed_data['amount']
-    category = parsed_data['category']
-    
+    # 2. Vaqt va sanani olish
     tz = pytz.timezone(TIMEZONE)
     now = datetime.now(tz)
     current_date = now.strftime("%Y-%m-%d")
@@ -89,18 +84,29 @@ async def process_expense_input(message: types.Message):
     
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO expenses (user_id, amount, item_name, category, date, time) VALUES (?, ?, ?, ?, ?, ?)",
-        (message.from_user.id, amount, item_name, category, current_date, current_time)
-    )
+    
+    total_sum = 0
+    response_text = f"✅ **Xarajatlar saqlandi!**\n📅 Vaqt: {current_date} {current_time}\n\n"
+    
+    # 3. Ro'yxatdagi har bir xarajatni alohida saqlaymiz va javobni shakllantiramiz
+    for item in parsed_items:
+        item_name = item['item_name']
+        amount = item['amount']
+        category = item['category']
+        
+        cursor.execute(
+            "INSERT INTO expenses (user_id, amount, item_name, category, date, time) VALUES (?, ?, ?, ?, ?, ?)",
+            (message.from_user.id, amount, item_name, category, current_date, current_time)
+        )
+        
+        total_sum += amount
+        response_text += f"🔹 {item_name} — {amount:,} so'm ({category})\n"
+        
     conn.commit()
     conn.close()
     
-    await message.answer(
-        f"✅ **Xarajat saqlandi!**\n\n"
-        f"📝 Nomi: {item_name}\n"
-        f"💰 Summa: {amount:,} so'm\n"
-        f"🗂 Kategoriya: {category}\n"
-        f"📅 Vaqt: {current_date} {current_time}",
-        parse_mode="Markdown"
-    )
+    # Agar bittadan ko'p narsa yozilgan bo'lsa, umumiy summani ham ko'rsatamiz
+    if len(parsed_items) > 1:
+        response_text += f"\n━━━━━━━━━━\n💰 **Chek bo'yicha jami: {total_sum:,} so'm**"
+        
+    await message.answer(response_text, parse_mode="Markdown")
