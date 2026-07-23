@@ -3,7 +3,8 @@ import re
 def get_category(item_name: str) -> str:
     """Kategoriyalarni avtomatik aniqlash funksiyasi"""
     name = item_name.lower()
-    if any(word in name for word in ['non', 'gril', 'suv', 'tuxum', 'yog', 'shakar', 'choy']):
+    # Magazin ro'yxatiga guruch, makaron kabilarni ham qo'shdik
+    if any(word in name for word in ['non', 'gril', 'suv', 'tuxum', 'yog', 'shakar', 'choy', 'guruch', 'makaron']):
         return "🛒 Magazin"
     elif any(word in name for word in ['taxi', 'taksi', 'avtobus', 'metro', 'yol']):
         return "🚕 Transport"
@@ -14,47 +15,59 @@ def get_category(item_name: str) -> str:
     return "🎁 Boshqa"
 
 def parse_expense_text(text: str):
-    text = text.strip()
+    # Vergullarni ham yangi qatorga aylantirib olamiz (qulaylik uchun)
+    text = text.replace(',', '\n')
+    lines = text.strip().split('\n')
     
-    # 1-qolip: "Gril 4 ta 62000" (Nomi + soni + ta + donasi narxi)
-    match1 = re.match(r'^(.*?)\s+(\d+)\s*ta\s+(\d+)$', text, re.IGNORECASE)
-    
-    # 2-qolip: "4 ta gril 62000" (Soni + ta + nomi + donasi narxi)
-    match2 = re.match(r'^(\d+)\s*ta\s+(.*?)\s+(\d+)$', text, re.IGNORECASE)
-    
-    # 3-qolip: Oddiy xarajat "Non 18000" yoki "Taxi 30000"
-    match3 = re.search(r'^(.*?)\s+(\d+)$', text, re.IGNORECASE)
+    results = []
 
-    item_name = ""
-    amount = 0
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+            
+        # Qoliplarni tekshirish (ta, kg, l, litr va kasr sonlar masalan 1.5 kg qo'shildi)
+        match1 = re.match(r'^(.*?)\s+(\d+(?:\.\d+)?)\s*(ta|kg|l|litr)\s+(\d+)$', line, re.IGNORECASE)
+        match2 = re.match(r'^(\d+(?:\.\d+)?)\s*(ta|kg|l|litr)\s+(.*?)\s+(\d+)$', line, re.IGNORECASE)
+        match3 = re.search(r'^(.*?)\s+(\d+)$', line, re.IGNORECASE)
 
-    if match1:
-        name = match1.group(1).strip().capitalize()
-        count = int(match1.group(2))
-        price = int(match1.group(3))
-        
-        item_name = f"{name} {count} ta"
-        amount = count * price  # Soni va narxini ko'paytiramiz
-        
-    elif match2:
-        count = int(match2.group(1))
-        name = match2.group(2).strip().capitalize()
-        price = int(match2.group(3))
-        
-        item_name = f"{name} {count} ta"
-        amount = count * price  # Soni va narxini ko'paytiramiz
-        
-    elif match3:
-        item_name = match3.group(1).strip().capitalize()
-        amount = int(match3.group(2))
-    else:
-        return None # Raqam topilmasa, xato qaytaradi (None)
+        item_name = ""
+        amount = 0
 
-    # Kategoriyani aniqlab olamiz
-    category = get_category(item_name)
+        if match1:
+            name = match1.group(1).strip().capitalize()
+            count = float(match1.group(2))
+            unit = match1.group(3).lower()
+            price = int(match1.group(4))
+            
+            # Kasr son bo'lmasa butun songa aylantiramiz (masalan 2.0 emas 2 bo'lishi uchun)
+            count_display = int(count) if count.is_integer() else count
+            
+            item_name = f"{name} {count_display} {unit}"
+            amount = int(count * price)
+            
+        elif match2:
+            count = float(match2.group(1))
+            unit = match2.group(2).lower()
+            name = match2.group(3).strip().capitalize()
+            price = int(match2.group(4))
+            
+            count_display = int(count) if count.is_integer() else count
+            
+            item_name = f"{name} {count_display} {unit}"
+            amount = int(count * price)
+            
+        elif match3:
+            item_name = match3.group(1).strip().capitalize()
+            amount = int(match3.group(2))
+        else:
+            continue # Tushunarsiz qatorlarni o'tkazib yuboradi
 
-    return {
-        "item_name": item_name,
-        "amount": amount,
-        "category": category
-    }
+        category = get_category(item_name)
+        results.append({
+            "item_name": item_name,
+            "amount": amount,
+            "category": category
+        })
+
+    return results
