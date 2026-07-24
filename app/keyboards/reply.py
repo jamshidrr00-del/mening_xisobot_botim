@@ -1,15 +1,14 @@
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
-def get_main_menu() -> ReplyKeyboardMarkup:
-    """Asosiy menyu tugmalarini yaratish"""
+def get_main_menu():
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="➕ Xarajat"), KeyboardButton(text="📊 Hisobot")],
+            [KeyboardButton(text="📊 Hisobot"), KeyboardButton(text="➕ Xarajat")],
             [KeyboardButton(text="📆 Haftalik"), KeyboardButton(text="📅 Oylik")],
-            [KeyboardButton(text="📂 Arxiv"), KeyboardButton(text="⚙️ Sozlamalar")]
+            [KeyboardButton(text="📂 Arxiv"), KeyboardButton(text="⚙️ Sozlamalar")],
+            [KeyboardButton(text="🗑 Tozalash")]
         ],
-        resize_keyboard=True,
-        input_field_placeholder="Tanlang yoki xarajatni yozing..."
+        resize_keyboard=True
     )
     return keyboard
 
