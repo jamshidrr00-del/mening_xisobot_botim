@@ -6,18 +6,21 @@ from aiogram import Router, F, types
 from aiogram.filters import CommandStart, Command
 from app.keyboards.reply import get_settings_menu
 from app.services.parser import parse_expense_text
-from config import DB_PATH, TIMEZONE
+from config import TIMEZONE
+from app.database.db import (
+    DB_PATH, add_user, update_balance, get_balance
+)
 
 user_router = Router()
 
-# Yordamchi funksiya: users jadvali mavjudligini tekshirish va yaratish
-def init_users_table(cursor):
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            balance REAL DEFAULT 0
-        )
-    ''')
+# Yordamchi funksiya: kategoriya nomidan uning ID sini olish yoki bazaga qo'shib ID qaytarish
+def get_or_create_category_id(cursor, category_name):
+    cursor.execute("SELECT id FROM categories WHERE name = ?", (category_name,))
+    row = cursor.fetchone()
+    if row:
+        return row[0]
+    cursor.execute("INSERT INTO categories (name) VALUES (?)", (category_name,))
+    return cursor.lastrowid
 
 # 1. COMMANDS (Start)
 @user_router.message(CommandStart())
@@ -25,25 +28,24 @@ async def cmd_start(message: types.Message):
     user_id = message.from_user.id
     full_name = message.from_user.full_name
     
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    init_users_table(cursor)
-    cursor.execute("INSERT OR IGNORE INTO users (user_id, balance) VALUES (?, 0)", (user_id,))
-    conn.commit()
-    conn.close()
+    add_user(user_id)
+    current_balance = get_balance(user_id)
 
     await message.answer(
         f"Salom, {full_name}! 👋\n\n"
         f"Men sizning shaxsiy moliyaviy yordamchingizman.\n"
         f"Xarajat kiritish uchun shunchaki matn yozing (Masalan: `Non 18000`, `2 ta non 36000` yoki `Taxi 30000`).\n\n"
+        f"💳 Joriy balans: **{current_balance:,.0f} so'm**\n"
         f"Balansni to'ldirish uchun: `/kirim 150000`",
-        reply_markup=types.ReplyKeyboardRemove() # Eski tugmalarni olib tashlaydi
+        reply_markup=types.ReplyKeyboardRemove(),
+        parse_mode="Markdown"
     )
 
 # 1.1. KIRIM COMMAND (Balansni to'ldirish)
 @user_router.message(Command("kirim"))
 async def cmd_kirim(message: types.Message):
     user_id = message.from_user.id
+    add_user(user_id)
     parts = message.text.split(maxsplit=1)
     
     if len(parts) < 2 or not parts[1].isdigit():
@@ -51,16 +53,8 @@ async def cmd_kirim(message: types.Message):
         return
     
     amount = float(parts[1])
-    
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    init_users_table(cursor)
-    cursor.execute("INSERT OR IGNORE INTO users (user_id, balance) VALUES (?, 0)", (user_id,))
-    cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
-    cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
-    current_balance = cursor.fetchone()[0]
-    conn.commit()
-    conn.close()
+    update_balance(user_id, amount)
+    current_balance = get_balance(user_id)
     
     await message.answer(
         f"✅ Hisobingizga **{amount:,.0f} so'm** qo'shildi!\n"
@@ -68,7 +62,7 @@ async def cmd_kirim(message: types.Message):
         parse_mode="Markdown"
     )
 
-# 2. MENU COMMAND HANDLERS (Tepada turishi shart)
+# 2. MENU COMMAND HANDLERS
 @user_router.message(F.text.in_({"⚙️ Sozlamalar", "/settings"}))
 async def process_settings(message: types.Message):
     await message.answer("⚙️ Sozlamalar bo'limidasiz. Nima o'zgartiramiz?", reply_markup=get_settings_menu())
@@ -86,20 +80,19 @@ async def process_report(message: types.Message):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    cursor.execute("SELECT category, item_name, amount FROM expenses WHERE user_id = ? AND date = ?", 
-                   (user_id, today))
+    cursor.execute("""
+        SELECT c.name, e.item_name, e.amount 
+        FROM expenses e
+        JOIN categories c ON e.category_id = c.id
+        WHERE e.user_id = ? AND e.date = ?
+    """, (user_id, today))
     rows = cursor.fetchall()
     
-    cursor.execute("SELECT SUM(amount) FROM expenses WHERE user_id = ? AND date = ?", 
-                   (user_id, today))
-    total = cursor.fetchone()[0] or 0
+    cursor.execute("SELECT SUM(amount) FROM expenses WHERE user_id = ? AND date = ?", (user_id, today))
+    total_res = cursor.fetchone()[0]
+    total = total_res if total_res else 0.0
     
-    # Joriy balansni olish
-    init_users_table(cursor)
-    cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
-    user_row = cursor.fetchone()
-    current_balance = user_row[0] if user_row else 0
-    
+    current_balance = get_balance(user_id)
     conn.close()
     
     if not rows:
@@ -111,17 +104,17 @@ async def process_report(message: types.Message):
     grouped = {}
     for cat, item, amt in rows:
         if cat not in grouped: grouped[cat] = []
-        grouped[cat].append(f"{item} — {amt:,} so'm")
+        grouped[cat].append(f"{item} — {amt:,.0f} so'm")
     
     for cat, items in grouped.items():
         report_text += f"{cat}:\n"
         report_text += "\n".join([f" • {i}" for i in items]) + "\n\n"
         
-    report_text += f"━━━━━━━━━━\n💰 **Jami xarajat: {total:,} so'm**\n💳 **Qolgan balans: {current_balance:,.0f} so'm**"
+    report_text += f"━━━━━━━━━━\n💰 **Jami xarajat: {total:,.0f} so'm**\n💳 **Qolgan balans: {current_balance:,.0f} so'm**"
     
     await message.answer(report_text, parse_mode="Markdown")
 
-# 3. OXIRGI XARAJATNI BEKOR QILISH (TOZALASH) FUNKSIYASI
+# 3. OXIRGI XARAJATNI BEKOR QILISH (TOZALASH)
 @user_router.message(F.text.in_({"🗑 Tozalash", "/undo"}))
 async def process_undo_last(message: types.Message):
     tz = pytz.timezone(TIMEZONE)
@@ -132,10 +125,10 @@ async def process_undo_last(message: types.Message):
     cursor = conn.cursor()
     
     cursor.execute("""
-        SELECT rowid, item_name, amount 
-        FROM expenses 
-        WHERE user_id = ? AND date = ? 
-        ORDER BY rowid DESC LIMIT 1
+        SELECT e.id, e.item_name, e.amount 
+        FROM expenses e
+        WHERE e.user_id = ? AND e.date = ? 
+        ORDER BY e.id DESC LIMIT 1
     """, (user_id, today))
     
     last_record = cursor.fetchone()
@@ -145,30 +138,25 @@ async def process_undo_last(message: types.Message):
         conn.close()
         return
         
-    rowid, item_name, amount = last_record
+    expense_id, item_name, amount = last_record
     
-    # Xarajatni o'chirish
-    cursor.execute("DELETE FROM expenses WHERE rowid = ?", (rowid,))
-    
-    # O'chirilgan xarajat summasini foydalanuvchi balansiga qaytarish
-    init_users_table(cursor)
-    cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
-    cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
-    current_balance = cursor.fetchone()[0]
-    
+    cursor.execute("DELETE FROM expenses WHERE id = ?", (expense_id,))
     conn.commit()
     conn.close()
+    
+    update_balance(user_id, amount)
+    current_balance = get_balance(user_id)
     
     await message.answer(
         f"🗑 **O'chirildi!**\n\n"
         f"Bekor qilingan xarajat:\n"
-        f"🔹 {item_name} — {amount:,} so'm\n\n"
+        f"🔹 {item_name} — {amount:,.0f} so'm\n\n"
         f"Ushbu summa balansingizga qaytarildi. ✅\n"
         f"💳 Qolgan balans: **{current_balance:,.0f} so'm**", 
         parse_mode="Markdown"
     )
 
-# 4. GENERAL INPUT HANDLER (Eng pastda turishi shart)
+# 4. GENERAL INPUT HANDLER
 @user_router.message(F.text)
 async def process_expense_input(message: types.Message):
     if message.text.startswith('/'):
@@ -179,7 +167,7 @@ async def process_expense_input(message: types.Message):
     parsed_items = parse_expense_text(text)
     
     if not parsed_items:
-        await message.answer("⚠️ Iltimos, xarajatni to'g'ri kiriting.\nMasalan:\n`Non 18000`\n`Gril 4 ta 62000`")
+        await message.answer("⚠️ Iltimos, xarajatni to'g'ri kiriting.\nMasalan:\n`Non 18000`\n`Gril 4 ta 62000`", parse_mode="Markdown")
         return
         
     tz = pytz.timezone(TIMEZONE)
@@ -188,9 +176,10 @@ async def process_expense_input(message: types.Message):
     current_time = now.strftime("%H:%M")
     user_id = message.from_user.id
     
+    add_user(user_id)
+    
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    init_users_table(cursor)
     
     total_sum = 0
     response_text = f"✅ **Xarajatlar saqlandi!**\n📅 Vaqt: {current_date} {current_time}\n\n"
@@ -198,25 +187,27 @@ async def process_expense_input(message: types.Message):
     for item in parsed_items:
         item_name = item['item_name']
         amount = item['amount']
-        category = item['category']
+        category_name = item['category']
         
-        cursor.execute(
-            "INSERT INTO expenses (user_id, amount, item_name, category, date, time) VALUES (?, ?, ?, ?, ?, ?)",
-            (user_id, amount, item_name, category, current_date, current_time)
-        )
+        category_id = get_or_create_category_id(cursor, category_name)
+        
+        cursor.execute('''
+            INSERT INTO expenses (user_id, amount, category_id, item_name, date, time)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (user_id, amount, category_id, item_name, current_date, current_time))
         
         total_sum += amount
-        response_text += f"🔹 {item_name} — {amount:,} so'm ({category})\n"
+        response_text += f"🔹 {item_name} — {amount:,.0f} so'm ({category_name})\n"
         
-    # Xarajat summasini balansdan ayirib tashlash
-    cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (total_sum, user_id))
-    cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
-    user_row = cursor.fetchone()
-    current_balance = user_row[0] if user_row else 0
+    cursor.execute('''
+        UPDATE users SET balance = balance - ? WHERE user_id = ?
+    ''', (total_sum, user_id))
     
     conn.commit()
     conn.close()
     
-    response_text += f"\n━━━━━━━━━━\n💰 **Jami xarajat: {total_sum:,} so'm**\n💳 **Qolgan balans: {current_balance:,.0f} so'm**"
+    current_balance = get_balance(user_id)
+    
+    response_text += f"\n━━━━━━━━━━\n💰 **Jami xarajat: {total_sum:,.0f} so'm**\n💳 **Qolgan balans: {current_balance:,.0f} so'm**"
         
     await message.answer(response_text, parse_mode="Markdown")
