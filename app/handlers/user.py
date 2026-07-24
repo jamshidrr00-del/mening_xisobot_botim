@@ -35,7 +35,7 @@ async def cmd_start(message: types.Message):
         f"Salom, {full_name}! 👋\n\n"
         f"Men sizning shaxsiy moliyaviy yordamchingizman.\n"
         f"Xarajat kiritish uchun shunchaki matn yozing (Masalan: `Non 18000`, `2 ta non 36000` yoki `Taxi 30000`).\n\n"
-        f"💳 Joriy balans: **{current_balance:,.0f} so'm**\n"
+        f"💳 Joriy balans: *{current_balance:,.0f} so'm*\n"
         f"Balansni to'ldirish uchun: `/kirim 150000`",
         reply_markup=types.ReplyKeyboardRemove(),
         parse_mode="Markdown"
