@@ -1,266 +1,376 @@
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
+from io import BytesIO
+
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
 from aiogram import Router, F, types
 from aiogram.filters import CommandStart, Command
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
-from app.keyboards.reply import get_settings_menu
+from app.database.db import DB_PATH, add_user, update_balance, get_balance, get_user_lang, set_user_lang
 from app.services.parser import parse_expense_text
+from app.keyboards.reply import get_main_menu, get_settings_menu
 from config import TIMEZONE
-from app.database.db import DB_PATH, add_user, update_balance, get_balance
 
 user_router = Router()
 
-# Kirim kiritish uchun holatlar (FSM)
-class IncomeStates(StatesGroup):
-    waiting_for_amount = State()
+class FSM(StatesGroup):
+    income = State()
+    exp_amount = State()
+    exp_name = State()
+    exp_category = State()
+    new_category = State()
+    search_date = State()
 
-# Yordamchi funksiya: kategoriya nomidan uning ID sini olish yoki bazaga qo'shib ID qaytarish
-def get_or_create_category_id(cursor, category_name):
-    cursor.execute("SELECT id FROM categories WHERE name = ?", (category_name,))
-    row = cursor.fetchone()
-    if row:
-        return row[0]
-    cursor.execute("INSERT INTO categories (name) VALUES (?)", (category_name,))
-    return cursor.lastrowid
+def get_categories_kb():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name FROM categories")
+    rows = cursor.fetchall()
+    conn.close()
+    
+    keyboard = []
+    for cat_id, name in rows:
+        keyboard.append([InlineKeyboardButton(text=name, callback_data=f"cat_{cat_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-# ==========================================
-# 1. ASOSIY BUYRUQLAR VA MENYU (Start)
-# ==========================================
+def get_categories_manage_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Kategoriya qo'shish", callback_data="add_cat")],
+        [InlineKeyboardButton(text="🗑 Kategoriya o'chirish", callback_data="del_cat_menu")]
+    ])
+
 @user_router.message(CommandStart())
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
     user_id = message.from_user.id
-    full_name = message.from_user.full_name
-    
     add_user(user_id)
-    current_balance = get_balance(user_id)
-
-    # Doimiy pastki menyuni yaratamiz
-    main_menu = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="📊 Hisobot"), KeyboardButton(text="🗑 Tozalash")],
-            [KeyboardButton(text="➕ Daromad kiritish"), KeyboardButton(text="⚙️ Sozlamalar")]
-        ],
-        resize_keyboard=True
-    )
-
-    welcome_text = (
-        f"Salom, {full_name}! 👋\n\n"
-        f"🤖 **Men sizning shaxsiy moliyaviy yordamchingizman.**\n\n"
-        f"❓ **Bu bot nima qiladi va nima uchun kerak?**\n"
-        f"Bot orqali siz kunlik xarajatlaringizni tez va oson nazorat qilishingiz mumkin. "
-        f"Qog'oz yoki murakkab dasturlarni unuting! Barchasini shu yerda, oddiy xabarlar orqali yozib boring va o'z byudjetingizni boshqaring.\n\n"
-        f"👥 *Eslatma:* Har bir foydalanuvchi o'zining shaxsiy hisoboti va balansiga ega. Botni do'stlaringizga ham ulashishingiz mumkin — ularning ma'lumotlari sizdan to'liq alohida saqlanadi.\n\n"
-        f"💡 **Qanday foydalaniladi?**\n"
-        f"1️⃣ **Xarajat kiritish:** Shunchaki xarajat nomi va summani yozib yuboring (Masalan: `Non 18000`).\n"
-        f"2️⃣ **Daromad qo'shish:** `/kirim` buyrug'i yoki tugma orqali summani kiriting.\n"
-        f"3️⃣ **Hisobot ko'rish:** 📊 Hisobot tugmasi orqali kunlik tahlilni ko'ring.\n\n"
-        f"💳 **Sizning joriy balansingiz:** **{current_balance:,.0f} so'm**"
-    )
-
+    balance = get_balance(user_id)
+    
     await message.answer(
-        welcome_text,
-        reply_markup=main_menu,
+        f"Salom, {message.from_user.full_name}! 👋\n\n🤖 Shaxsiy moliyaviy yordamchingizga xush kelibsiz.\n💳 Joriy balans: **{balance:,.0f} so'm**",
+        reply_markup=get_main_menu(message),
         parse_mode="Markdown"
     )
 
-# ==========================================
-# 2. DAROMAD (KIRIM) BO'LIMI (Interaktiv)
-# ==========================================
-@user_router.message(F.text == "➕ Daromad kiritish")
+@user_router.message(F.text.in_({"⚙️ Sozlamalar", "⚙️ Настройки", "⚙️ Settings", "/settings"}))
+async def process_settings(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("⚙️ Sozlamalar bo'limi. Kerakli amalni tanlang:", reply_markup=get_settings_menu(message))
+
+@user_router.message(F.text.in_({"🇺🇿 O'zbekcha", "🇷🇺 Русский", "🇬🇧 English"}))
+async def change_language(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    if "O'zbekcha" in message.text:
+        set_user_lang(user_id, 'uz')
+    elif "Русский" in message.text:
+        set_user_lang(user_id, 'ru')
+    elif "English" in message.text:
+        set_user_lang(user_id, 'en')
+        
+    await message.answer("✅ Til muvaffaqiyatli o'zgartirildi!", reply_markup=get_main_menu(message))
+
+@user_router.message(F.text.in_({"⬅️ Ortga", "⬅️ Назад", "⬅️ Back"}))
+async def process_back(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("🏠 Asosiy menyu", reply_markup=get_main_menu(message))
+
+# --- DAROMAD KIRITISH ---
+@user_router.message(F.text.in_({"➕ Daromad kiritish", "➕ Добавить доход", "➕ Add Income"}))
 async def process_income_btn(message: types.Message, state: FSMContext):
-    await state.set_state(IncomeStates.waiting_for_amount)
-    await message.answer(
-        "💰 Iltimos, qo'shiladigan summani kiriting (masalan: `150000`):",
-        parse_mode="Markdown"
-    )
+    await state.set_state(FSM.income)
+    await message.answer("💰 Daromad summasini kiriting (masalan: `1500000` yoki `15 000 000`):", parse_mode="Markdown")
 
-@user_router.message(Command("kirim"))
-async def cmd_kirim(message: types.Message, state: FSMContext):
-    await state.set_state(IncomeStates.waiting_for_amount)
-    await message.answer(
-        "💰 Iltimos, qo'shiladigan summani kiriting (masalan: `150000`):",
-        parse_mode="Markdown"
-    )
-
-# Foydalanuvchi kiritgan summani qabul qilish
-@user_router.message(IncomeStates.waiting_for_amount, F.text)
+@user_router.message(F.state == FSM.income, F.text)
 async def process_income_amount(message: types.Message, state: FSMContext):
     if message.text.startswith('/'):
         await state.clear()
         return
-
-    text = message.text.strip()
-    if not text.isdigit():
-        await message.answer("⚠️ Iltimos, faqat raqamlardan iborat summani kiriting! (Masalan: `150000`)")
-        return
+        
+    text = message.text.strip().replace(" ", "").replace(",", ".")
     
+    if not text.replace('.', '', 1).isdigit():
+        await message.answer("❌ Noto'g'ri qiymat. Iltimos, faqat raqam kiriting (masalan: `15000000` yoki `15 000 000`):", parse_mode="Markdown")
+        return
+        
     amount = float(text)
+    if amount <= 0:
+        await message.answer("❌ Summa 0 dan katta bo'lishi kerak:")
+        return
+        
     user_id = message.from_user.id
-    add_user(user_id)
     update_balance(user_id, amount)
-    current_balance = get_balance(user_id)
-    
+    balance = get_balance(user_id)
     await state.clear()
-    
-    # Xato yozilsa, darhol bekor qilish imkonini beruvchi tugma
-    undo_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🗑 Bekor qilish (Xato yozdim)", callback_data=f"undo_kirim_{amount}")]
-    ])
-    
     await message.answer(
-        f"✅ Hisobingizga **{amount:,.0f} so'm** qo'shildi!\n"
-        f"💳 Joriy balans: **{current_balance:,.0f} so'm**",
-        reply_markup=undo_keyboard,
+        f"✅ Hisobingizga **{amount:,.0f} so'm** qo'shildi!\n💳 Joriy balans: **{balance:,.0f} so'm**",
+        reply_markup=get_main_menu(message),
         parse_mode="Markdown"
     )
 
-# Kirimni bekor qilish tugmasi bosilganda ishlaydigan funksiya
-@user_router.callback_query(F.data.startswith("undo_kirim_"))
-async def undo_kirim_callback(callback: types.CallbackQuery):
+# --- XARAJAT KIRITISH (FSM orqali) ---
+@user_router.message(F.text.in_({"➕ Xarajat kiritish", "➕ Добавить расход", "➕ Add Expense"}))
+async def process_expense_btn(message: types.Message, state: FSMContext):
+    await state.set_state(FSM.exp_amount)
+    await message.answer("💳 Xarajat summasini kiriting (masalan: `50000` yoki `50 000`):", parse_mode="Markdown")
+
+@user_router.message(F.state == FSM.exp_amount, F.text)
+async def process_exp_amount(message: types.Message, state: FSMContext):
+    if message.text.startswith('/'):
+        await state.clear()
+        return
+        
+    text = message.text.strip().replace(" ", "").replace(",", ".")
+    
+    if not text.replace('.', '', 1).isdigit():
+        await message.answer("❌ Xato summa. Qaytadan raqam kiriting:", parse_mode="Markdown")
+        return
+        
+    amount = float(text)
+    if amount <= 0:
+        await message.answer("❌ Summa 0 dan katta bo'lishi kerak:")
+        return
+        
+    await state.update_data(amount=amount)
+    await state.set_state(FSM.exp_name)
+    await message.answer("📝 Xarajat nomini kiriting (masalan: Non):", parse_mode="Markdown")
+
+@user_router.message(F.state == FSM.exp_name, F.text)
+async def process_exp_name(message: types.Message, state: FSMContext):
+    if message.text.startswith('/'):
+        await state.clear()
+        return
+    await state.update_data(item_name=message.text.strip())
+    kb = get_categories_kb()
+    await state.set_state(FSM.exp_category)
+    await message.answer("📂 Kategoriyani tanlang:", reply_markup=kb)
+
+@user_router.callback_query(F.state == FSM.exp_category, F.data.startswith("cat_"))
+async def process_exp_category_select(callback: types.CallbackQuery, state: FSMContext):
+    category_id = int(callback.data.split("_")[1])
+    data = await state.get_data()
+    amount = data['amount']
+    item_name = data['item_name']
+    
     user_id = callback.from_user.id
-    amount = float(callback.data.split("_")[2])
-    
-    update_balance(user_id, -amount)
-    current_balance = get_balance(user_id)
-    
-    await callback.message.edit_text(
-        f"🗑 **Kirim bekor qilindi!** (-{amount:,.0f} so'm)\n"
-        f"💳 Qolgan balans: **{current_balance:,.0f} so'm**",
-        parse_mode="Markdown"
-    )
-    await callback.answer("Bekor qilindi!")
-
-# ==========================================
-# 3. BOSHQA MENYU TUGMALARI (Sozlamalar, Ortga)
-# ==========================================
-@user_router.message(F.text.in_({"⚙️ Sozlamalar", "/settings"}))
-async def process_settings(message: types.Message, state: FSMContext):
-    await state.clear()
-    await message.answer("⚙️ Sozlamalar bo'limidasiz. Nima o'zgartiramiz?", reply_markup=get_settings_menu())
-
-@user_router.message(F.text == "⬅️ Ortga")
-async def process_back(message: types.Message, state: FSMContext):
-    await state.clear()
-    main_menu = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="📊 Hisobot"), KeyboardButton(text="🗑 Tozalash")],
-            [KeyboardButton(text="➕ Daromad kiritish"), KeyboardButton(text="⚙️ Sozlamalar")]
-        ],
-        resize_keyboard=True
-    )
-    await message.answer("Asosiy menyuga qaytdik 🏠", reply_markup=main_menu)
-
-# ==========================================
-# 4. HISOBOT VA XARAJATNI TOZALASH
-# ==========================================
-@user_router.message(F.text.in_({"📊 Hisobot", "/report"}))
-async def process_report(message: types.Message, state: FSMContext):
-    await state.clear()
     tz = pytz.timezone(TIMEZONE)
-    today = datetime.now(tz).strftime("%Y-%m-%d")
-    user_id = message.from_user.id
+    now = datetime.now(tz)
+    current_date = now.strftime("%Y-%m-%d")
+    current_time = now.strftime("%H:%M")
     
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
-    cursor.execute("""
-        SELECT c.name, e.item_name, e.amount 
-        FROM expenses e
-        JOIN categories c ON e.category_id = c.id
-        WHERE e.user_id = ? AND e.date = ?
-    """, (user_id, today))
-    rows = cursor.fetchall()
-    
-    cursor.execute("SELECT SUM(amount) FROM expenses WHERE user_id = ? AND date = ?", (user_id, today))
-    total_res = cursor.fetchone()[0]
-    total = total_res if total_res else 0.0
-    
-    current_balance = get_balance(user_id)
-    conn.close()
-    
-    if not rows:
-        await message.answer(f"📅 Bugun hali hech qanday xarajat kiritilmadi.\n💳 Joriy balans: **{current_balance:,.0f} so'm**", parse_mode="Markdown")
-        return
-        
-    report_text = f"📊 **Bugungi hisobot** ({today})\n\n"
-    
-    grouped = {}
-    for cat, item, amt in rows:
-        if cat not in grouped: grouped[cat] = []
-        grouped[cat].append(f"{item} — {amt:,.0f} so'm")
-    
-    for cat, items in grouped.items():
-        report_text += f"{cat}:\n"
-        report_text += "\n".join([f" • {i}" for i in items]) + "\n\n"
-        
-    report_text += f"━━━━━━━━━━\n💰 **Jami xarajat: {total:,.0f} so'm**\n💳 **Qolgan balans: {current_balance:,.0f} so'm**"
-    
-    await message.answer(report_text, parse_mode="Markdown")
-
-@user_router.message(F.text.in_({"🗑 Tozalash", "/undo"}))
-async def process_undo_last(message: types.Message, state: FSMContext):
-    await state.clear()
-    tz = pytz.timezone(TIMEZONE)
-    today = datetime.now(tz).strftime("%Y-%m-%d")
-    user_id = message.from_user.id
-    
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        SELECT e.id, e.item_name, e.amount 
-        FROM expenses e
-        WHERE e.user_id = ? AND e.date = ? 
-        ORDER BY e.id DESC LIMIT 1
-    """, (user_id, today))
-    
-    last_record = cursor.fetchone()
-    
-    if not last_record:
-        await message.answer("🤷‍♂️ Bugun uchun o'chirishga hech qanday xarajat topilmadi.")
-        conn.close()
-        return
-        
-    expense_id, item_name, amount = last_record
-    
-    cursor.execute("DELETE FROM expenses WHERE id = ?", (expense_id,))
+    cursor.execute('''
+        INSERT INTO expenses (user_id, amount, category_id, item_name, date, time)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (user_id, amount, category_id, item_name, current_date, current_time))
+    cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (amount, user_id))
     conn.commit()
     conn.close()
     
-    update_balance(user_id, amount)
-    current_balance = get_balance(user_id)
-    
-    await message.answer(
-        f"🗑 **O'chirildi!**\n\n"
-        f"Bekor qilingan xarajat:\n"
-        f"🔹 {item_name} — {amount:,.0f} so'm\n\n"
-        f"Ushbu summa balansingizga qaytarildi. ✅\n"
-        f"💳 Qolgan balans: **{current_balance:,.0f} so'm**", 
+    balance = get_balance(user_id)
+    await state.clear()
+    await callback.message.edit_text(
+        f"✅ Saqlandi!\n🔹 {item_name} — {amount:,.0f} so'm\n💳 Balans: **{balance:,.0f} so'm**",
         parse_mode="Markdown"
     )
 
-# ==========================================
-# 5. ASOSIY XARAJAT QABUL QILUVCHI HANDLER
-# ==========================================
+# --- VIZUAL DIAGRAMMALAR ---
+@user_router.message(F.text.in_({"📊 Diagramma", "📊 Диаграмма", "📊 Chart"}))
+async def process_chart(message: types.Message, state: FSMContext):
+    await state.clear()
+    user_id = message.from_user.id
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT c.name, SUM(e.amount) 
+        FROM expenses e
+        JOIN categories c ON e.category_id = c.id
+        WHERE e.user_id = ?
+        GROUP BY c.name
+    """, (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    
+    if not rows:
+        await message.answer("🤷‍♂️ Diagramma tuzish uchun xarajatlar mavjud emas.")
+        return
+        
+    categories = [row[0] for row in rows]
+    amounts = [row[1] for row in rows]
+    
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.pie(amounts, labels=categories, autopct='%1.1f%%', startangle=90, colors=plt.cm.Paired.colors)
+    ax.axis('equal')
+    ax.set_title("Xarajatlar taqsimoti")
+    
+    buffer = BytesIO()
+    plt.savefig(buffer, format='png', bbox_inches='tight')
+    buffer.seek(0)
+    plt.close(fig)
+    
+    photo = BufferedInputFile(buffer.getvalue(), filename="chart.png")
+    await message.answer_photo(photo, caption="📊 Sizning umumiy xarajatlar diagrammangiz:")
+
+# --- QIDIRUV (Kategoriya va Sana bo'yicha) ---
+@user_router.message(F.text.in_({"🔍 Qidiruv", "🔍 Поиск", "🔍 Search"}))
+async def process_search_menu(message: types.Message, state: FSMContext):
+    await state.clear()
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📂 Kategoriya bo'yicha", callback_data="search_cat_menu")],
+        [InlineKeyboardButton(text="📅 Sana bo'yicha", callback_data="search_date_prompt")]
+    ])
+    await message.answer("🔍 Qidiruv turini tanlang:", reply_markup=kb)
+
+@user_router.callback_query(F.data == "search_cat_menu")
+async def callback_search_cat_menu(callback: types.CallbackQuery):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name FROM categories")
+    rows = cursor.fetchall()
+    conn.close()
+    
+    keyboard = []
+    for cat_id, name in rows:
+        keyboard.append([InlineKeyboardButton(text=name, callback_data=f"schcat_{cat_id}")])
+    await callback.message.edit_text("🔍 Qidirish uchun kategoriyani tanlang:", reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
+    await callback.answer()
+
+@user_router.callback_query(F.data.startswith("schcat_"))
+async def callback_search_by_category(callback: types.CallbackQuery):
+    cat_id = int(callback.data.split("_")[1])
+    user_id = callback.from_user.id
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT e.item_name, e.amount, e.date, c.name 
+        FROM expenses e
+        JOIN categories c ON e.category_id = c.id
+        WHERE e.user_id = ? AND e.category_id = ?
+        ORDER BY e.date DESC
+    """, (user_id, cat_id))
+    rows = cursor.fetchall()
+    conn.close()
+    
+    if not rows:
+        await callback.message.edit_text("🤷‍♂️ Bu kategoriyada xarajatlar topilmadi.")
+        return
+        
+    text = f"📂 **Kategoriya bo'yicha qidiruv natijasi:**\n\n"
+    total = 0
+    for item, amt, dt, cat in rows:
+        text += f"• {dt} | {item} — {amt:,.0f} so'm\n"
+        total += amt
+    text += f"\n━━━━━━━━━━\n💰 **Jami: {total:,.0f} so'm**"
+    await callback.message.edit_text(text, parse_mode="Markdown")
+
+@user_router.callback_query(F.data == "search_date_prompt")
+async def callback_search_date_prompt(callback: types.CallbackQuery, state: FSMContext):
+    await state.set_state(FSM.search_date)
+    await callback.message.answer("📅 Sanani kiriting (Format: `YYYY-MM-DD`, masalan: `2026-07-25`):", parse_mode="Markdown")
+    await callback.answer()
+
+@user_router.message(F.state == FSM.search_date, F.text)
+async def process_search_by_date(message: types.Message, state: FSMContext):
+    date_str = message.text.strip()
+    user_id = message.from_user.id
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT c.name, e.item_name, e.amount, e.time 
+        FROM expenses e
+        JOIN categories c ON e.category_id = c.id
+        WHERE e.user_id = ? AND e.date = ?
+    """, (user_id, date_str))
+    rows = cursor.fetchall()
+    conn.close()
+    
+    await state.clear()
+    if not rows:
+        await message.answer(f"🤷‍♂️ {date_str} sanasida hech qanday xarajat topilmadi.")
+        return
+        
+    text = f"📅 **{date_str} sanasidagi xarajatlar:**\n\n"
+    total = 0
+    for cat, item, amt, tm in rows:
+        text += f"• [{tm}] {cat}: {item} — {amt:,.0f} so'm\n"
+        total += amt
+    text += f"\n━━━━━━━━━━\n💰 **Jami: {total:,.0f} so'm**"
+    await message.answer(text, parse_mode="Markdown", reply_markup=get_main_menu(message))
+
+# --- KATEGORIYALARNI BOSHQARISH (Qo'shish va O'chirish) ---
+@user_router.message(F.text.in_({"📂 Kategoriyalar", "📂 Категории", "📂 Categories"}))
+async def process_categories_menu(message: types.Message, state: FSMContext):
+    await message.answer("📂 Kategoriyani boshqarish:", reply_markup=get_categories_manage_kb())
+
+@user_router.callback_query(F.data == "add_cat")
+async def callback_add_cat(callback: types.CallbackQuery, state: FSMContext):
+    await state.set_state(FSM.new_category)
+    await callback.message.answer("📂 Yangi kategoriya nomini kiriting:")
+    await callback.answer()
+
+@user_router.message(F.state == FSM.new_category, F.text)
+async def save_new_category(message: types.Message, state: FSMContext):
+    cat_name = message.text.strip()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("INSERT INTO categories (name) VALUES (?)", (cat_name,))
+        conn.commit()
+        await message.answer(f"✅ '{cat_name}' kategoriyasi qo'shildi!", reply_markup=get_main_menu(message))
+    except sqlite3.IntegrityError:
+        await message.answer("⚠️ Bu kategoriya allaqachon mavjud!")
+    conn.close()
+    await state.clear()
+
+@user_router.callback_query(F.data == "del_cat_menu")
+async def callback_del_cat_menu(callback: types.CallbackQuery):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name FROM categories")
+    rows = cursor.fetchall()
+    conn.close()
+    
+    keyboard = []
+    for cat_id, name in rows:
+        keyboard.append([InlineKeyboardButton(text=f"❌ {name}", callback_data=f"delcat_{cat_id}")])
+    await callback.message.edit_text("O'chiriladigan kategoriyani tanlang:", reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
+    await callback.answer()
+
+@user_router.callback_query(F.data.startswith("delcat_"))
+async def callback_delete_category(callback: types.CallbackQuery):
+    cat_id = int(callback.data.split("_")[1])
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM categories WHERE id = ?", (cat_id,))
+    row = cursor.fetchone()
+    if row:
+        cat_name = row[0]
+        cursor.execute("DELETE FROM categories WHERE id = ?", (cat_id,))
+        conn.commit()
+        await callback.message.edit_text(f"🗑 '{cat_name}' kategoriyasi o'chirildi!")
+    conn.close()
+    await callback.answer()
+
+# --- ERKIN MATN ORQALI XARAJAT QO'SHISH (Parser) ---
 @user_router.message(F.text)
 async def process_expense_input(message: types.Message, state: FSMContext):
     await state.clear()
     if message.text.startswith('/'):
-        await message.answer("⚠️ Kechirasiz, bunday buyruq hozircha ishlamaydi.")
         return
-
     text = message.text.strip()
     parsed_items = parse_expense_text(text)
-    
     if not parsed_items:
-        await message.answer("⚠️ Iltimos, xarajatni to'g'ri kiriting.\nMasalan:\n`Non 18000`\n`Gril 4 ta 62000`", parse_mode="Markdown")
         return
         
     tz = pytz.timezone(TIMEZONE)
@@ -268,39 +378,35 @@ async def process_expense_input(message: types.Message, state: FSMContext):
     current_date = now.strftime("%Y-%m-%d")
     current_time = now.strftime("%H:%M")
     user_id = message.from_user.id
-    
     add_user(user_id)
     
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
     total_sum = 0
-    response_text = f"✅ **Xarajatlar saqlandi!**\n📅 Vaqt: {current_date} {current_time}\n\n"
+    response_text = f"✅ Saqlandi!\n\n"
     
     for item in parsed_items:
         item_name = item['item_name']
         amount = item['amount']
         category_name = item['category']
         
-        category_id = get_or_create_category_id(cursor, category_name)
-        
-        cursor.execute('''
-            INSERT INTO expenses (user_id, amount, category_id, item_name, date, time)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (user_id, amount, category_id, item_name, current_date, current_time))
-        
+        cursor.execute("SELECT id FROM categories WHERE name = ?", (category_name,))
+        row = cursor.fetchone()
+        if row:
+            category_id = row[0]
+        else:
+            cursor.execute("INSERT INTO categories (name) VALUES (?)", (category_name,))
+            category_id = cursor.lastrowid
+            
+        cursor.execute('INSERT INTO expenses (user_id, amount, category_id, item_name, date, time) VALUES (?, ?, ?, ?, ?, ?)', 
+                       (user_id, amount, category_id, item_name, current_date, current_time))
         total_sum += amount
         response_text += f"🔹 {item_name} — {amount:,.0f} so'm ({category_name})\n"
         
-    cursor.execute('''
-        UPDATE users SET balance = balance - ? WHERE user_id = ?
-    ''', (total_sum, user_id))
-    
+    cursor.execute('UPDATE users SET balance = balance - ? WHERE user_id = ?', (total_sum, user_id))
     conn.commit()
     conn.close()
     
-    current_balance = get_balance(user_id)
-    
-    response_text += f"\n━━━━━━━━━━\n💰 **Jami xarajat: {total_sum:,.0f} so'm**\n💳 **Qolgan balans: {current_balance:,.0f} so'm**"
-        
+    balance = get_balance(user_id)
+    response_text += f"\n━━━━━━━━━━\n💰 **Jami: {total_sum:,.0f} so'm**\n💳 **Balans: {balance:,.0f} so'm**"
     await message.answer(response_text, parse_mode="Markdown")
