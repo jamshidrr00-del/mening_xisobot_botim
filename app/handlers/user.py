@@ -86,17 +86,26 @@ async def process_back(message: types.Message, state: FSMContext):
 @user_router.message(F.text.in_({"➕ Daromad kiritish", "➕ Добавить доход", "➕ Add Income"}))
 async def process_income_btn(message: types.Message, state: FSMContext):
     await state.set_state(FSM.income)
-    await message.answer("💰 Daromad summasini kiriting (masalan: `1500000`):", parse_mode="Markdown")
+    await message.answer("💰 Daromad summasini kiriting (masalan: `1500000` yoki `15 000 000`):", parse_mode="Markdown")
 
 @user_router.message(F.state == FSM.income, F.text)
 async def process_income_amount(message: types.Message, state: FSMContext):
     if message.text.startswith('/'):
         await state.clear()
         return
-    text = message.text.strip().replace(" ", "")
-    if not text.isdigit():
+        
+    # Probellarni olib tashlaymiz va vergulni nuqtaga almashtiramiz
+    text = message.text.strip().replace(" ", "").replace(",", ".")
+    
+    if not text.replace('.', '', 1).isdigit():
+        await message.answer("❌ Noto'g'ri qiymat. Iltimos, faqat raqam kiriting (masalan: `15000000` yoki `15 000 000`):", parse_mode="Markdown")
         return
+        
     amount = float(text)
+    if amount <= 0:
+        await message.answer("❌ Summa 0 dan katta bo'lishi kerak:")
+        return
+        
     user_id = message.from_user.id
     update_balance(user_id, amount)
     balance = get_balance(user_id)
