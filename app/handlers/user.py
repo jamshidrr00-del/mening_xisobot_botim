@@ -97,11 +97,22 @@ async def process_income_amount(message: types.Message, state: FSMContext):
         return
 
     text = message.text.strip()
-    if not text.isdigit():
-        await message.answer("⚠️ Iltimos, faqat raqamlardan iborat summani kiriting! (Masalan: `150000`)")
+    
+    # 📌 Matn orasidagi bo'shliqlarni olib tashlaymiz 
+    # (Masalan: "15 000 000" -> "15000000")
+    cleaned_text = text.replace(" ", "")
+    
+    if not cleaned_text.isdigit():
+        await message.answer(
+            "⚠️ Iltimos, faqat raqamlardan iborat summani kiriting!\n"
+            "Namuna formatlar:\n"
+            "• `15000000`\n"
+            "• `15 000 000`", 
+            parse_mode="Markdown"
+        )
         return
     
-    amount = float(text)
+    amount = float(cleaned_text)
     user_id = message.from_user.id
     add_user(user_id)
     update_balance(user_id, amount)
