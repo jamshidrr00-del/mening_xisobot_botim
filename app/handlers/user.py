@@ -6,6 +6,8 @@ import pytz
 from aiogram import Router, F, types
 from aiogram.filters import CommandStart, Command
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
 
 from app.keyboards.reply import get_settings_menu
 from app.services.parser import parse_expense_text
@@ -13,6 +15,10 @@ from config import TIMEZONE
 from app.database.db import DB_PATH, add_user, update_balance, get_balance
 
 user_router = Router()
+
+# Kirim kiritish uchun holatlar (FSM)
+class IncomeStates(StatesGroup):
+    waiting_for_amount = State()
 
 # Yordamchi funksiya: kategoriya nomidan uning ID sini olish yoki bazaga qo'shib ID qaytarish
 def get_or_create_category_id(cursor, category_name):
@@ -27,7 +33,8 @@ def get_or_create_category_id(cursor, category_name):
 # 1. ASOSIY BUYRUQLAR VA MENYU (Start)
 # ==========================================
 @user_router.message(CommandStart())
-async def cmd_start(message: types.Message):
+async def cmd_start(message: types.Message, state: FSMContext):
+    await state.clear()
     user_id = message.from_user.id
     full_name = message.from_user.full_name
     
@@ -46,8 +53,14 @@ async def cmd_start(message: types.Message):
     welcome_text = (
         f"Salom, {full_name}! 👋\n\n"
         f"🤖 **Men sizning shaxsiy moliyaviy yordamchingizman.**\n\n"
-        f"Xarajat kiritish uchun shunchaki matn yozing (Masalan: `Non 18000`).\n"
-        f"Daromad kiritish uchun pastdagi tugmadan foydalaning.\n\n"
+        f"❓ **Bu bot nima qiladi va nima uchun kerak?**\n"
+        f"Bot orqali siz kunlik xarajatlaringizni tez va oson nazorat qilishingiz mumkin. "
+        f"Qog'oz yoki murakkab dasturlarni unuting! Barchasini shu yerda, oddiy xabarlar orqali yozib boring va o'z byudjetingizni boshqaring.\n\n"
+        f"👥 *Eslatma:* Har bir foydalanuvchi o'zining shaxsiy hisoboti va balansiga ega. Botni do'stlaringizga ham ulashishingiz mumkin — ularning ma'lumotlari sizdan to'liq alohida saqlanadi.\n\n"
+        f"💡 **Qanday foydalaniladi?**\n"
+        f"1️⃣ **Xarajat kiritish:** Shunchaki xarajat nomi va summani yozib yuboring (Masalan: `Non 18000`).\n"
+        f"2️⃣ **Daromad qo'shish:** `/kirim` buyrug'i yoki tugma orqali summani kiriting.\n"
+        f"3️⃣ **Hisobot ko'rish:** 📊 Hisobot tugmasi orqali kunlik tahlilni ko'ring.\n\n"
         f"💳 **Sizning joriy balansingiz:** **{current_balance:,.0f} so'm**"
     )
 
@@ -58,29 +71,43 @@ async def cmd_start(message: types.Message):
     )
 
 # ==========================================
-# 2. DAROMAD (KIRIM) BO'LIMI
+# 2. DAROMAD (KIRIM) BO'LIMI (Interaktiv)
 # ==========================================
 @user_router.message(F.text == "➕ Daromad kiritish")
-async def process_income_btn(message: types.Message):
+async def process_income_btn(message: types.Message, state: FSMContext):
+    await state.set_state(IncomeStates.waiting_for_amount)
     await message.answer(
-        "Daromad (Kirim) qilish uchun summani quyidagicha yozib yuboring:\n\n"
-        "👉 `/kirim 150000`", 
+        "💰 Iltimos, qo'shiladigan summani kiriting (masalan: `150000`):",
         parse_mode="Markdown"
     )
 
 @user_router.message(Command("kirim"))
-async def cmd_kirim(message: types.Message):
-    user_id = message.from_user.id
-    add_user(user_id)
-    parts = message.text.split(maxsplit=1)
-    
-    if len(parts) < 2 or not parts[1].isdigit():
-        await message.answer("⚠️ Iltimos, summani to'g'ri kiriting!\nMasalan: `/kirim 150000`", parse_mode="Markdown")
+async def cmd_kirim(message: types.Message, state: FSMContext):
+    await state.set_state(IncomeStates.waiting_for_amount)
+    await message.answer(
+        "💰 Iltimos, qo'shiladigan summani kiriting (masalan: `150000`):",
+        parse_mode="Markdown"
+    )
+
+# Foydalanuvchi kiritgan summani qabul qilish
+@user_router.message(IncomeStates.waiting_for_amount, F.text)
+async def process_income_amount(message: types.Message, state: FSMContext):
+    if message.text.startswith('/'):
+        await state.clear()
+        return
+
+    text = message.text.strip()
+    if not text.isdigit():
+        await message.answer("⚠️ Iltimos, faqat raqamlardan iborat summani kiriting! (Masalan: `150000`)")
         return
     
-    amount = float(parts[1])
+    amount = float(text)
+    user_id = message.from_user.id
+    add_user(user_id)
     update_balance(user_id, amount)
     current_balance = get_balance(user_id)
+    
+    await state.clear()
     
     # Xato yozilsa, darhol bekor qilish imkonini beruvchi tugma
     undo_keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -98,15 +125,11 @@ async def cmd_kirim(message: types.Message):
 @user_router.callback_query(F.data.startswith("undo_kirim_"))
 async def undo_kirim_callback(callback: types.CallbackQuery):
     user_id = callback.from_user.id
-    
-    # tugma datasidan summani ajratib olib float ga o'tkazamiz
     amount = float(callback.data.split("_")[2])
     
-    # Balansdan bekor qilingan summani ayirib tashlaymiz
     update_balance(user_id, -amount)
     current_balance = get_balance(user_id)
     
-    # Xabarni o'zgartirib qo'yamiz (tugma yo'qoladi)
     await callback.message.edit_text(
         f"🗑 **Kirim bekor qilindi!** (-{amount:,.0f} so'm)\n"
         f"💳 Qolgan balans: **{current_balance:,.0f} so'm**",
@@ -118,11 +141,13 @@ async def undo_kirim_callback(callback: types.CallbackQuery):
 # 3. BOSHQA MENYU TUGMALARI (Sozlamalar, Ortga)
 # ==========================================
 @user_router.message(F.text.in_({"⚙️ Sozlamalar", "/settings"}))
-async def process_settings(message: types.Message):
+async def process_settings(message: types.Message, state: FSMContext):
+    await state.clear()
     await message.answer("⚙️ Sozlamalar bo'limidasiz. Nima o'zgartiramiz?", reply_markup=get_settings_menu())
 
 @user_router.message(F.text == "⬅️ Ortga")
-async def process_back(message: types.Message):
+async def process_back(message: types.Message, state: FSMContext):
+    await state.clear()
     main_menu = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="📊 Hisobot"), KeyboardButton(text="🗑 Tozalash")],
@@ -136,7 +161,8 @@ async def process_back(message: types.Message):
 # 4. HISOBOT VA XARAJATNI TOZALASH
 # ==========================================
 @user_router.message(F.text.in_({"📊 Hisobot", "/report"}))
-async def process_report(message: types.Message):
+async def process_report(message: types.Message, state: FSMContext):
+    await state.clear()
     tz = pytz.timezone(TIMEZONE)
     today = datetime.now(tz).strftime("%Y-%m-%d")
     user_id = message.from_user.id
@@ -179,7 +205,8 @@ async def process_report(message: types.Message):
     await message.answer(report_text, parse_mode="Markdown")
 
 @user_router.message(F.text.in_({"🗑 Tozalash", "/undo"}))
-async def process_undo_last(message: types.Message):
+async def process_undo_last(message: types.Message, state: FSMContext):
+    await state.clear()
     tz = pytz.timezone(TIMEZONE)
     today = datetime.now(tz).strftime("%Y-%m-%d")
     user_id = message.from_user.id
@@ -187,7 +214,6 @@ async def process_undo_last(message: types.Message):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Bugungi oxirgi xarajatni topamiz
     cursor.execute("""
         SELECT e.id, e.item_name, e.amount 
         FROM expenses e
@@ -224,7 +250,8 @@ async def process_undo_last(message: types.Message):
 # 5. ASOSIY XARAJAT QABUL QILUVCHI HANDLER
 # ==========================================
 @user_router.message(F.text)
-async def process_expense_input(message: types.Message):
+async def process_expense_input(message: types.Message, state: FSMContext):
+    await state.clear()
     if message.text.startswith('/'):
         await message.answer("⚠️ Kechirasiz, bunday buyruq hozircha ishlamaydi.")
         return
