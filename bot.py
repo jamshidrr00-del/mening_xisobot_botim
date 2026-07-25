@@ -1,7 +1,9 @@
 import asyncio
+from datetime import datetime, timedelta
 import logging
 import sqlite3
-from datetime import datetime, timedelta
+import threading
+
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
@@ -13,12 +15,33 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
+from flask import Flask
 
-# Bot tokeningizni kiriting
+# --- SOZLAMALAR VA LOGLAR ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+
 TOKEN = "YOUR_BOT_TOKEN_HERE"
+PORT = 8080  # Render yoki boshqa hostlar uchun port
 DB_PATH = "bot_database.db"
 
-logging.basicConfig(level=logging.INFO)
+# --- FLASK SERVER (24/7 ishlashi uchun) ---
+app = Flask(__name__)
+
+
+@app.route("/")
+def index():
+  return "Expense Tracker Bot is running 24/7! 🚀"
+
+
+def run_flask():
+  """Flask serverni alohida oqimda (thread) yurgizish"""
+  app.run(host="0.0.0.0", port=PORT)
+
+
+# --- AIOGRAM BOT VA ROUTER ---
 router = Router()
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -66,7 +89,6 @@ def init_db():
   conn.close()
 
 
-# Standart kategoriyalarni qo'shish
 def seed_categories():
   init_db()
   conn = get_connection()
@@ -85,9 +107,6 @@ def seed_categories():
       pass
   conn.commit()
   conn.close()
-
-
-seed_categories()
 
 
 # --- FSM HOLATLARI ---
@@ -119,6 +138,7 @@ async def cmd_start(message: Message):
       "Bu moliyaviy hisob-kitob boti. Quyidagi buyruqlar orqali"
       " boshqarishingiz mumkin:\n\n"
       "➕ /kirim - Balansga pul qo'shish\n"
+      "💸 /xarajat - Xarajat qo'shish\n"
       "📊 /report - Umumiy hisobot\n"
       "📅 /weekly - Haftalik hisobot\n"
       "📈 /monthly - Oylik hisobot\n"
@@ -169,7 +189,7 @@ async def process_income(message: Message, state: FSMContext):
   )
 
 
-# --- XARAJAT QO'SHISH (Matn orqali yoki avtomatik) ---
+# --- XARAJAT QO'SHISH ---
 @router.message(Command("xarajat"))
 async def cmd_xarajat(message: Message, state: FSMContext):
   await message.answer("💸 Xarajat summasini kiriting:")
@@ -180,13 +200,14 @@ async def cmd_xarajat(message: Message, state: FSMContext):
 async def exp_amount(message: Message, state: FSMContext):
   try:
     amount = float(message.text.replace(",", "."))
+    if amount <= 0:
+      raise ValueError
   except ValueError:
     await message.answer("❌ Xato summa. Qaytadan kiriting:")
     return
 
   await state.update_data(amount=amount)
 
-  # Kategoriyalarni chiqarish
   conn = get_connection()
   cursor = conn.cursor()
   cursor.execute("SELECT id, name FROM categories")
@@ -231,7 +252,6 @@ async def exp_finish(message: Message, state: FSMContext):
   conn = get_connection()
   cursor = conn.cursor()
 
-  # Xarajatni qo'shish va balansni kamaytirish
   cursor.execute(
       """
         INSERT INTO expenses (user_id, amount, category_id, item_name, date, time)
@@ -385,7 +405,6 @@ async def cmd_undo(message: Message):
   conn = get_connection()
   cursor = conn.cursor()
 
-  # Oxirgi xarajatni topish
   cursor.execute(
       """
         SELECT id, amount, item_name FROM expenses 
@@ -403,7 +422,6 @@ async def cmd_undo(message: Message):
 
   exp_id, amount, item_name = last_exp
 
-  # Xarajatni o'chirish va balansni qaytarish
   cursor.execute("DELETE FROM expenses WHERE id = ?", (exp_id,))
   cursor.execute(
       "UPDATE users SET balance = balance + ? WHERE user_id = ?",
@@ -433,7 +451,9 @@ async def cmd_settings(message: Message):
           ]
       ]
   )
-  await message.answer("⚙️ *Sozlamalar menyusi*:", reply_markup=keyboard, parse_mode="Markdown")
+  await message.answer(
+      "⚙️ *Sozlamalar menyusi*:", reply_markup=keyboard, parse_mode="Markdown"
+  )
 
 
 @router.callback_query(F.data == "clear_all_data")
@@ -453,13 +473,25 @@ async def clear_data_callback(callback: CallbackQuery):
   await callback.answer()
 
 
-# --- BOTNI ISHGA TUSHIRISH ---
+# --- ASOSIY MAIN FUNKSIYASI ---
 async def main():
+  seed_categories()
+  logging.info("Ma'lumotlar bazasi tekshirildi va tayyor.")
+
   dp.include_router(router)
   await bot.delete_webhook(drop_pending_updates=True)
-  print("Bot ishga tushdi...")
+  logging.info("Telegram bot ishga tushdi...")
   await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
-  asyncio.run(main())
+  # 1. Flask serverni orqa fonda ishga tushiramiz (Render/Web service band bo'lib qolmasligi uchun)
+  flask_thread = threading.Thread(target=run_flask)
+  flask_thread.daemon = True
+  flask_thread.start()
+
+  # 2. Aiogram botni asosiy oqimda ishga tushiramiz
+  try:
+    asyncio.run(main())
+  except KeyboardInterrupt:
+    logging.info("Bot to'xtatildi.")
