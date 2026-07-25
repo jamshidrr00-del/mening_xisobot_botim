@@ -28,7 +28,6 @@ async def main():
     logging.info("Ma'lumotlar bazasi tekshirildi va tayyor.")
 
     # 2. Bot va Dispatcher sozlamalari
-    # Diqqat: .env dagi TOKEN olinadi (Xavfsizlik)
     bot = Bot(token=TOKEN)
     dp = Dispatcher()
 
