@@ -2,14 +2,15 @@ import logging
 import sqlite3
 from datetime import datetime
 import pytz
+
 from aiogram import Router, F, types
 from aiogram.filters import CommandStart, Command
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+
 from app.keyboards.reply import get_settings_menu
 from app.services.parser import parse_expense_text
 from config import TIMEZONE
-from app.database.db import (
-    DB_PATH, add_user, update_balance, get_balance
-)
+from app.database.db import DB_PATH, add_user, update_balance, get_balance
 
 user_router = Router()
 
@@ -22,7 +23,9 @@ def get_or_create_category_id(cursor, category_name):
     cursor.execute("INSERT INTO categories (name) VALUES (?)", (category_name,))
     return cursor.lastrowid
 
-# 1. COMMANDS (Start)
+# ==========================================
+# 1. ASOSIY BUYRUQLAR VA MENYU (Start)
+# ==========================================
 @user_router.message(CommandStart())
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
@@ -31,29 +34,40 @@ async def cmd_start(message: types.Message):
     add_user(user_id)
     current_balance = get_balance(user_id)
 
+    # Doimiy pastki menyuni yaratamiz
+    main_menu = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📊 Hisobot"), KeyboardButton(text="🗑 Tozalash")],
+            [KeyboardButton(text="➕ Daromad kiritish"), KeyboardButton(text="⚙️ Sozlamalar")]
+        ],
+        resize_keyboard=True
+    )
+
     welcome_text = (
         f"Salom, {full_name}! 👋\n\n"
         f"🤖 **Men sizning shaxsiy moliyaviy yordamchingizman.**\n\n"
-        f"❓ **Bu bot nima qiladi va nima uchun kerak?**\n"
-        f"Bot orqali siz kunlik xarajatlaringizni tez va oson nazorat qilishingiz mumkin. "
-        f"Qog'oz yoki murakkab dasturlarni unuting! Barchasini shu yerda, oddiy xabarlar orqali yozib boring va o'z byudjetingizni boshqaring.\n\n"
-        f"💡 **Qanday foydalaniladi?**\n"
-        f"1️⃣ **Xarajat kiritish:** Shunchaki xarajat nomi va summani yozib yuboring.\n"
-        f"👉 _Masalan:_ `Non 18000`, `2 ta non 36000` yoki `Taxi 30000`\n\n"
-        f"2️⃣ **Daromad qo'shish:** Balansingizni to'ldirish uchun buyruqdan foydalaning.\n"
-        f"👉 _Masalan:_ `/kirim 150000`\n\n"
-        f"3️⃣ **Hisobot ko'rish:** /report buyrug'ini yozish orqali bugun qayerga qancha pul ketganini tahlil qiling.\n\n"
-        f"💳 **Sizning joriy balansingiz:** **{current_balance:,.0f} so'm**\n"
-        f"Hozirning o'zida `/kirim` orqali balansingizni to'ldirib, xarajat kiritib ko'ring!"
+        f"Xarajat kiritish uchun shunchaki matn yozing (Masalan: `Non 18000`).\n"
+        f"Daromad kiritish uchun pastdagi tugmadan foydalaning.\n\n"
+        f"💳 **Sizning joriy balansingiz:** **{current_balance:,.0f} so'm**"
     )
 
     await message.answer(
         welcome_text,
-        reply_markup=types.ReplyKeyboardRemove(),
+        reply_markup=main_menu,
         parse_mode="Markdown"
     )
 
-# 1.1. KIRIM COMMAND (Balansni to'ldirish)
+# ==========================================
+# 2. DAROMAD (KIRIM) BO'LIMI
+# ==========================================
+@user_router.message(F.text == "➕ Daromad kiritish")
+async def process_income_btn(message: types.Message):
+    await message.answer(
+        "Daromad (Kirim) qilish uchun summani quyidagicha yozib yuboring:\n\n"
+        "👉 `/kirim 150000`", 
+        parse_mode="Markdown"
+    )
+
 @user_router.message(Command("kirim"))
 async def cmd_kirim(message: types.Message):
     user_id = message.from_user.id
@@ -68,42 +82,59 @@ async def cmd_kirim(message: types.Message):
     update_balance(user_id, amount)
     current_balance = get_balance(user_id)
     
+    # Xato yozilsa, darhol bekor qilish imkonini beruvchi tugma
+    undo_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑 Bekor qilish (Xato yozdim)", callback_data=f"undo_kirim_{amount}")]
+    ])
+    
     await message.answer(
         f"✅ Hisobingizga **{amount:,.0f} so'm** qo'shildi!\n"
         f"💳 Joriy balans: **{current_balance:,.0f} so'm**",
+        reply_markup=undo_keyboard,
         parse_mode="Markdown"
     )
 
-# 1.1. KIRIM COMMAND (Balansni to'ldirish)
-@user_router.message(Command("kirim"))
-async def cmd_kirim(message: types.Message):
-    user_id = message.from_user.id
-    add_user(user_id)
-    parts = message.text.split(maxsplit=1)
+# Kirimni bekor qilish tugmasi bosilganda ishlaydigan funksiya
+@user_router.callback_query(F.data.startswith("undo_kirim_"))
+async def undo_kirim_callback(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
     
-    if len(parts) < 2 or not parts[1].isdigit():
-        await message.answer("⚠️ Iltimos, summani to'g'ri kiriting!\nMasalan: `/kirim 150000`", parse_mode="Markdown")
-        return
+    # tugma datasidan summani ajratib olib float ga o'tkazamiz
+    amount = float(callback.data.split("_")[2])
     
-    amount = float(parts[1])
-    update_balance(user_id, amount)
+    # Balansdan bekor qilingan summani ayirib tashlaymiz
+    update_balance(user_id, -amount)
     current_balance = get_balance(user_id)
     
-    await message.answer(
-        f"✅ Hisobingizga **{amount:,.0f} so'm** qo'shildi!\n"
-        f"💳 Joriy balans: **{current_balance:,.0f} so'm**",
+    # Xabarni o'zgartirib qo'yamiz (tugma yo'qoladi)
+    await callback.message.edit_text(
+        f"🗑 **Kirim bekor qilindi!** (-{amount:,.0f} so'm)\n"
+        f"💳 Qolgan balans: **{current_balance:,.0f} so'm**",
         parse_mode="Markdown"
     )
+    await callback.answer("Bekor qilindi!")
 
-# 2. MENU COMMAND HANDLERS
+# ==========================================
+# 3. BOSHQA MENYU TUGMALARI (Sozlamalar, Ortga)
+# ==========================================
 @user_router.message(F.text.in_({"⚙️ Sozlamalar", "/settings"}))
 async def process_settings(message: types.Message):
     await message.answer("⚙️ Sozlamalar bo'limidasiz. Nima o'zgartiramiz?", reply_markup=get_settings_menu())
 
 @user_router.message(F.text == "⬅️ Ortga")
 async def process_back(message: types.Message):
-    await message.answer("Asosiy menyuga qaytdik 🏠", reply_markup=types.ReplyKeyboardRemove())
+    main_menu = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📊 Hisobot"), KeyboardButton(text="🗑 Tozalash")],
+            [KeyboardButton(text="➕ Daromad kiritish"), KeyboardButton(text="⚙️ Sozlamalar")]
+        ],
+        resize_keyboard=True
+    )
+    await message.answer("Asosiy menyuga qaytdik 🏠", reply_markup=main_menu)
 
+# ==========================================
+# 4. HISOBOT VA XARAJATNI TOZALASH
+# ==========================================
 @user_router.message(F.text.in_({"📊 Hisobot", "/report"}))
 async def process_report(message: types.Message):
     tz = pytz.timezone(TIMEZONE)
@@ -147,7 +178,6 @@ async def process_report(message: types.Message):
     
     await message.answer(report_text, parse_mode="Markdown")
 
-# 3. OXIRGI XARAJATNI BEKOR QILISH (TOZALASH)
 @user_router.message(F.text.in_({"🗑 Tozalash", "/undo"}))
 async def process_undo_last(message: types.Message):
     tz = pytz.timezone(TIMEZONE)
@@ -157,6 +187,7 @@ async def process_undo_last(message: types.Message):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
+    # Bugungi oxirgi xarajatni topamiz
     cursor.execute("""
         SELECT e.id, e.item_name, e.amount 
         FROM expenses e
@@ -189,7 +220,9 @@ async def process_undo_last(message: types.Message):
         parse_mode="Markdown"
     )
 
-# 4. GENERAL INPUT HANDLER
+# ==========================================
+# 5. ASOSIY XARAJAT QABUL QILUVCHI HANDLER
+# ==========================================
 @user_router.message(F.text)
 async def process_expense_input(message: types.Message):
     if message.text.startswith('/'):
