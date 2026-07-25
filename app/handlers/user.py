@@ -1,6 +1,6 @@
 import logging
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
 
 from aiogram import Router, F, types
@@ -41,12 +41,11 @@ async def cmd_start(message: types.Message, state: FSMContext):
     add_user(user_id)
     current_balance = get_balance(user_id)
 
-    # Doimiy pastki menyuni yaratamiz (Haftalik va Oylik hisobotlar qo'shilgan)
+    # Doimiy pastki menyuni yaratamiz
     main_menu = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="📊 Hisobot"), KeyboardButton(text="📅 Haftalik hisobot")],
-            [KeyboardButton(text="📈 Oylik hisobot"), KeyboardButton(text="➕ Daromad kiritish")],
-            [KeyboardButton(text="🗑 Tozalash"), KeyboardButton(text="⚙️ Sozlamalar")]
+            [KeyboardButton(text="📊 Hisobot"), KeyboardButton(text="🗑 Tozalash")],
+            [KeyboardButton(text="➕ Daromad kiritish"), KeyboardButton(text="⚙️ Sozlamalar")]
         ],
         resize_keyboard=True
     )
@@ -60,8 +59,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
         f"👥 *Eslatma:* Har bir foydalanuvchi o'zining shaxsiy hisoboti va balansiga ega. Botni do'stlaringizga ham ulashishingiz mumkin — ularning ma'lumotlari sizdan to'liq alohida saqlanadi.\n\n"
         f"💡 **Qanday foydalaniladi?**\n"
         f"1️⃣ **Xarajat kiritish:** Shunchaki xarajat nomi va summani yozib yuboring (Masalan: `Non 18000`).\n"
-        f"2️⃣ **Daromad qo'shish:** `/kirim` buyrug'i yoki tugma orqali summani kiriting (masalan: `150000` yoki `15 000 000`).\n"
-        f"3️⃣ **Hisobot ko'rish:** Kunlik, haftalik va oylik tahlillarni tugmalar orqali kuzatib boring.\n\n"
+        f"2️⃣ **Daromad qo'shish:** `/kirim` buyrug'i yoki tugma orqali summani kiriting.\n"
+        f"3️⃣ **Hisobot ko'rish:** 📊 Hisobot tugmasi orqali kunlik tahlilni ko'ring.\n\n"
         f"💳 **Sizning joriy balansingiz:** **{current_balance:,.0f} so'm**"
     )
 
@@ -78,7 +77,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
 async def process_income_btn(message: types.Message, state: FSMContext):
     await state.set_state(IncomeStates.waiting_for_amount)
     await message.answer(
-        "💰 Iltimos, qo'shiladigan summani kiriting (masalan: `150000` yoki `15 000 000`):",
+        "💰 Iltimos, qo'shiladigan summani kiriting (masalan: `150000`):",
         parse_mode="Markdown"
     )
 
@@ -86,11 +85,11 @@ async def process_income_btn(message: types.Message, state: FSMContext):
 async def cmd_kirim(message: types.Message, state: FSMContext):
     await state.set_state(IncomeStates.waiting_for_amount)
     await message.answer(
-        "💰 Iltimos, qo'shiladigan summani kiriting (masalan: `150000` yoki `15 000 000`):",
+        "💰 Iltimos, qo'shiladigan summani kiriting (masalan: `150000`):",
         parse_mode="Markdown"
     )
 
-# Foydalanuvchi kiritgan summani qabul qilish (Bo'shliqlarni ham qo'llab-quvvatlaydi)
+# Foydalanuvchi kiritgan summani qabul qilish
 @user_router.message(IncomeStates.waiting_for_amount, F.text)
 async def process_income_amount(message: types.Message, state: FSMContext):
     if message.text.startswith('/'):
@@ -98,19 +97,11 @@ async def process_income_amount(message: types.Message, state: FSMContext):
         return
 
     text = message.text.strip()
-    cleaned_text = text.replace(" ", "")
-    
-    if not cleaned_text.isdigit():
-        await message.answer(
-            "⚠️ Iltimos, faqat raqamlardan iborat summani kiriting!\n"
-            "Namuna formatlar:\n"
-            "• `15000000`\n"
-            "• `15 000 000`", 
-            parse_mode="Markdown"
-        )
+    if not text.isdigit():
+        await message.answer("⚠️ Iltimos, faqat raqamlardan iborat summani kiriting! (Masalan: `150000`)")
         return
     
-    amount = float(cleaned_text)
+    amount = float(text)
     user_id = message.from_user.id
     add_user(user_id)
     update_balance(user_id, amount)
@@ -118,6 +109,7 @@ async def process_income_amount(message: types.Message, state: FSMContext):
     
     await state.clear()
     
+    # Xato yozilsa, darhol bekor qilish imkonini beruvchi tugma
     undo_keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🗑 Bekor qilish (Xato yozdim)", callback_data=f"undo_kirim_{amount}")]
     ])
@@ -129,6 +121,7 @@ async def process_income_amount(message: types.Message, state: FSMContext):
         parse_mode="Markdown"
     )
 
+# Kirimni bekor qilish tugmasi bosilganda ishlaydigan funksiya
 @user_router.callback_query(F.data.startswith("undo_kirim_"))
 async def undo_kirim_callback(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -157,16 +150,15 @@ async def process_back(message: types.Message, state: FSMContext):
     await state.clear()
     main_menu = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="📊 Hisobot"), KeyboardButton(text="📅 Haftalik hisobot")],
-            [KeyboardButton(text="📈 Oylik hisobot"), KeyboardButton(text="➕ Daromad kiritish")],
-            [KeyboardButton(text="🗑 Tozalash"), KeyboardButton(text="⚙️ Sozlamalar")]
+            [KeyboardButton(text="📊 Hisobot"), KeyboardButton(text="🗑 Tozalash")],
+            [KeyboardButton(text="➕ Daromad kiritish"), KeyboardButton(text="⚙️ Sozlamalar")]
         ],
         resize_keyboard=True
     )
     await message.answer("Asosiy menyuga qaytdik 🏠", reply_markup=main_menu)
 
 # ==========================================
-# 4. HISOBOTLAR (KUNDALIK, HAFTALIK, OYLIK) VA TOZALASH
+# 4. HISOBOT VA XARAJATNI TOZALASH
 # ==========================================
 @user_router.message(F.text.in_({"📊 Hisobot", "/report"}))
 async def process_report(message: types.Message, state: FSMContext):
@@ -205,103 +197,7 @@ async def process_report(message: types.Message, state: FSMContext):
         grouped[cat].append(f"{item} — {amt:,.0f} so'm")
     
     for cat, items in grouped.items():
-        report_text += f"📂 **{cat}**:\n"
-        report_text += "\n".join([f" • {i}" for i in items]) + "\n\n"
-        
-    report_text += f"━━━━━━━━━━\n💰 **Jami xarajat: {total:,.0f} so'm**\n💳 **Qolgan balans: {current_balance:,.0f} so'm**"
-    
-    await message.answer(report_text, parse_mode="Markdown")
-
-@user_router.message(F.text.in_({"📅 Haftalik hisobot", "/weekly"}))
-async def process_weekly_report(message: types.Message, state: FSMContext):
-    await state.clear()
-    tz = pytz.timezone(TIMEZONE)
-    now = datetime.now(tz)
-    today = now.strftime("%Y-%m-%d")
-    
-    start_of_week = (now - timedelta(days=now.weekday())).strftime("%Y-%m-%d")
-    user_id = message.from_user.id
-    
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        SELECT c.name, e.item_name, e.amount, e.date 
-        FROM expenses e
-        JOIN categories c ON e.category_id = c.id
-        WHERE e.user_id = ? AND e.date BETWEEN ? AND ?
-        ORDER BY e.date DESC
-    """, (user_id, start_of_week, today))
-    rows = cursor.fetchall()
-    
-    cursor.execute("SELECT SUM(amount) FROM expenses WHERE user_id = ? AND date BETWEEN ? AND ?", (user_id, start_of_week, today))
-    total_res = cursor.fetchone()[0]
-    total = total_res if total_res else 0.0
-    
-    current_balance = get_balance(user_id)
-    conn.close()
-    
-    if not rows:
-        await message.answer(f"📅 Bu hafta ({start_of_week} dan bugungacha) hali hech qanday xarajat kiritilmadi.\n💳 Joriy balans: **{current_balance:,.0f} so'm**", parse_mode="Markdown")
-        return
-        
-    report_text = f"📅 **Haftalik hisobot** ({start_of_week} — {today})\n\n"
-    
-    grouped = {}
-    for cat, item, amt, date_val in rows:
-        if cat not in grouped: grouped[cat] = []
-        grouped[cat].append(f"{item} — {amt:,.0f} so'm ({date_val})")
-    
-    for cat, items in grouped.items():
-        report_text += f"📂 **{cat}**:\n"
-        report_text += "\n".join([f" • {i}" for i in items]) + "\n\n"
-        
-    report_text += f"━━━━━━━━━━\n💰 **Jami xarajat: {total:,.0f} so'm**\n💳 **Qolgan balans: {current_balance:,.0f} so'm**"
-    
-    await message.answer(report_text, parse_mode="Markdown")
-
-@user_router.message(F.text.in_({"📈 Oylik hisobot", "/monthly"}))
-async def process_monthly_report(message: types.Message, state: FSMContext):
-    await state.clear()
-    tz = pytz.timezone(TIMEZONE)
-    now = datetime.now(tz)
-    today = now.strftime("%Y-%m-%d")
-    
-    start_of_month = now.strftime("%Y-%m-01")
-    user_id = message.from_user.id
-    
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        SELECT c.name, e.item_name, e.amount, e.date 
-        FROM expenses e
-        JOIN categories c ON e.category_id = c.id
-        WHERE e.user_id = ? AND e.date BETWEEN ? AND ?
-        ORDER BY e.date DESC
-    """, (user_id, start_of_month, today))
-    rows = cursor.fetchall()
-    
-    cursor.execute("SELECT SUM(amount) FROM expenses WHERE user_id = ? AND date BETWEEN ? AND ?", (user_id, start_of_month, today))
-    total_res = cursor.fetchone()[0]
-    total = total_res if total_res else 0.0
-    
-    current_balance = get_balance(user_id)
-    conn.close()
-    
-    if not rows:
-        await message.answer(f"📈 Bu oy ({start_of_month} dan bugungacha) hali hech qanday xarajat kiritilmadi.\n💳 Joriy balans: **{current_balance:,.0f} so'm**", parse_mode="Markdown")
-        return
-        
-    report_text = f"📈 **Oylik hisobot** ({start_of_month} — {today})\n\n"
-    
-    grouped = {}
-    for cat, item, amt, date_val in rows:
-        if cat not in grouped: grouped[cat] = []
-        grouped[cat].append(f"{item} — {amt:,.0f} so'm ({date_val})")
-    
-    for cat, items in grouped.items():
-        report_text += f"📂 **{cat}**:\n"
+        report_text += f"{cat}:\n"
         report_text += "\n".join([f" • {i}" for i in items]) + "\n\n"
         
     report_text += f"━━━━━━━━━━\n💰 **Jami xarajat: {total:,.0f} so'm**\n💳 **Qolgan balans: {current_balance:,.0f} so'm**"
