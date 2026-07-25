@@ -13,11 +13,12 @@ def init_db():
     conn = get_connection()
     cursor = conn.cursor()
     
-    # 1. Foydalanuvchilar va ularning plastik karta balansi
+    # 1. Foydalanuvchilar, balans va til ustuni bilan
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
             balance REAL DEFAULT 0.0,
+            language TEXT DEFAULT 'uz',
             registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
@@ -155,3 +156,29 @@ def get_total_expenses(user_id):
     result = cursor.fetchone()
     conn.close()
     return result[0] if result[0] else 0.0
+
+# ==========================================
+# TILNI SAQLASH VA OLISH FUNKSIYALARI
+# ==========================================
+
+def get_user_lang(user_id: int) -> str:
+    """Foydalanuvchi tilini bazadan olish (default: 'uz')"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    
+    if row and row[0]:
+        return row[0]
+    return "uz"  # Standart til
+
+def set_user_lang(user_id: int, lang: str):
+    """Foydalanuvchi tilini bazaga saqlash/yangilash"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE users SET language = ? WHERE user_id = ?
+    """, (lang, user_id))
+    conn.commit()
+    conn.close()
