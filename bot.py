@@ -23,7 +23,7 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 
-TOKEN = "YOUR_BOT_TOKEN_HERE"
+TOKEN = "8522306001:AAFNLspuu9QEX0wCGvzohK69Bf2qietscXQ"
 PORT = 8080  # Render yoki boshqa hostlar uchun port
 DB_PATH = "bot_database.db"
 
