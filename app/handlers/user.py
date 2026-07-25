@@ -31,12 +31,24 @@ async def cmd_start(message: types.Message):
     add_user(user_id)
     current_balance = get_balance(user_id)
 
-    await message.answer(
+    welcome_text = (
         f"Salom, {full_name}! 👋\n\n"
-        f"Men sizning shaxsiy moliyaviy yordamchingizman.\n"
-        f"Xarajat kiritish uchun shunchaki matn yozing (Masalan: `Non 18000`, `2 ta non 36000` yoki `Taxi 30000`).\n\n"
-        f"💳 Joriy balans: **{current_balance:,.0f} so'm**\n"
-        f"Balansni to'ldirish uchun: `/kirim 150000`",
+        f"🤖 **Men sizning shaxsiy moliyaviy yordamchingizman.**\n\n"
+        f"❓ **Bu bot nima qiladi va nima uchun kerak?**\n"
+        f"Bot orqali siz kunlik xarajatlaringizni tez va oson nazorat qilishingiz mumkin. "
+        f"Qog'oz yoki murakkab dasturlarni unuting! Barchasini shu yerda, oddiy xabarlar orqali yozib boring va o'z byudjetingizni boshqaring.\n\n"
+        f"💡 **Qanday foydalaniladi?**\n"
+        f"1️⃣ **Xarajat kiritish:** Shunchaki xarajat nomi va summani yozib yuboring.\n"
+        f"👉 _Masalan:_ `Non 18000`, `2 ta non 36000` yoki `Taxi 30000`\n\n"
+        f"2️⃣ **Daromad qo'shish:** Balansingizni to'ldirish uchun buyruqdan foydalaning.\n"
+        f"👉 _Masalan:_ `/kirim 150000`\n\n"
+        f"3️⃣ **Hisobot ko'rish:** /report buyrug'ini yozish orqali bugun qayerga qancha pul ketganini tahlil qiling.\n\n"
+        f"💳 **Sizning joriy balansingiz:** **{current_balance:,.0f} so'm**\n"
+        f"Hozirning o'zida `/kirim` orqali balansingizni to'ldirib, xarajat kiritib ko'ring!"
+    )
+
+    await message.answer(
+        welcome_text,
         reply_markup=types.ReplyKeyboardRemove(),
         parse_mode="Markdown"
     )
