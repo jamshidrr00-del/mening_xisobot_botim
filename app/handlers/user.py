@@ -4,13 +4,13 @@ from datetime import datetime
 import pytz
 from aiogram import Router, F, types
 from aiogram.filters import CommandStart
-from app.keyboards.reply import get_main_menu, get_settings_menu
+from app.keyboards.reply import get_settings_menu
 from app.services.parser import parse_expense_text
 from config import DB_PATH, TIMEZONE
 
 user_router = Router()
 
-# 1. COMMANDS
+# 1. COMMANDS (Eski tugmalarni yashiramiz)
 @user_router.message(CommandStart())
 async def cmd_start(message: types.Message):
     full_name = message.from_user.full_name
@@ -18,19 +18,19 @@ async def cmd_start(message: types.Message):
         f"Salom, {full_name}! 👋\n\n"
         f"Men sizning shaxsiy moliyaviy yordamchingizman.\n"
         f"Xarajat kiritish uchun shunchaki matn yozing (Masalan: `Non 18000`, `2 ta non 36000` yoki `Taxi 30000`).",
-        reply_markup=get_main_menu()
+        reply_markup=types.ReplyKeyboardRemove() # <--- Shu kod eski tugmalarni olib tashlaydi
     )
 
-# 2. SPECIFIC BUTTON HANDLERS (Tepada turishi shart)
-@user_router.message(F.text == "⚙️ Sozlamalar")
+# 2. MENU COMMAND HANDLERS (Tepada turishi shart)
+@user_router.message(F.text.in_({"⚙️ Sozlamalar", "/settings"}))
 async def process_settings(message: types.Message):
     await message.answer("⚙️ Sozlamalar bo'limidasiz. Nima o'zgartiramiz?", reply_markup=get_settings_menu())
 
 @user_router.message(F.text == "⬅️ Ortga")
 async def process_back(message: types.Message):
-    await message.answer("Asosiy menyuga qaytdik 🏠", reply_markup=get_main_menu())
+    await message.answer("Asosiy menyuga qaytdik 🏠", reply_markup=types.ReplyKeyboardRemove())
 
-@user_router.message(F.text == "📊 Hisobot")
+@user_router.message(F.text.in_({"📊 Hisobot", "/report"}))
 async def process_report(message: types.Message):
     tz = pytz.timezone(TIMEZONE)
     today = datetime.now(tz).strftime("%Y-%m-%d")
@@ -67,7 +67,7 @@ async def process_report(message: types.Message):
     await message.answer(report_text, parse_mode="Markdown")
 
 # 3. OXIRGI XARAJATNI BEKOR QILISH (TOZALASH) FUNKSIYASI
-@user_router.message(F.text == "🗑 Tozalash")
+@user_router.message(F.text.in_({"🗑 Tozalash", "/undo"}))
 async def process_undo_last(message: types.Message):
     tz = pytz.timezone(TIMEZONE)
     today = datetime.now(tz).strftime("%Y-%m-%d")
@@ -75,7 +75,6 @@ async def process_undo_last(message: types.Message):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Foydalanuvchining bugungi oxirgi xarajatini topamiz
     cursor.execute("""
         SELECT rowid, item_name, amount 
         FROM expenses 
@@ -92,7 +91,6 @@ async def process_undo_last(message: types.Message):
         
     rowid, item_name, amount = last_record
     
-    # Topilgan oxirgi xarajatni bazadan o'chiramiz
     cursor.execute("DELETE FROM expenses WHERE rowid = ?", (rowid,))
     conn.commit()
     conn.close()
@@ -108,8 +106,12 @@ async def process_undo_last(message: types.Message):
 # 4. GENERAL INPUT HANDLER (Eng pastda turishi shart)
 @user_router.message(F.text)
 async def process_expense_input(message: types.Message):
+    # Buyruqlarni xarajat deb o'ylab xato qilmasligi uchun himoya
+    if message.text.startswith('/'):
+        await message.answer("⚠️ Kechirasiz, bunday buyruq hozircha ishlamaydi.")
+        return
+
     text = message.text.strip()
-    
     parsed_items = parse_expense_text(text)
     
     if not parsed_items:
