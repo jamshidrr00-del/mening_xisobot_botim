@@ -3,7 +3,8 @@ import re
 def get_category(item_name: str) -> str:
     """Kategoriyalarni avtomatik aniqlash funksiyasi"""
     name = item_name.lower()
-    if any(word in name for word in ['non', 'gril', 'suv', 'tuxum', 'yog', 'shakar', 'choy']):
+    # Magazin ro'yxatiga guruch, makaron kabilarni ham qo'shdik
+    if any(word in name for word in ['non', 'gril', 'suv', 'tuxum', 'yog', 'shakar', 'choy', 'guruch', 'makaron']):
         return "🛒 Magazin"
     elif any(word in name for word in ['taxi', 'taksi', 'avtobus', 'metro', 'yol']):
         return "🚕 Transport"
@@ -25,9 +26,9 @@ def parse_expense_text(text: str):
         if not line:
             continue
             
-        # Qoliplarni tekshirish
-        match1 = re.match(r'^(.*?)\s+(\d+)\s*ta\s+(\d+)$', line, re.IGNORECASE)
-        match2 = re.match(r'^(\d+)\s*ta\s+(.*?)\s+(\d+)$', line, re.IGNORECASE)
+        # Qoliplarni tekshirish (ta, kg, l, litr va kasr sonlar masalan 1.5 kg qo'shildi)
+        match1 = re.match(r'^(.*?)\s+(\d+(?:\.\d+)?)\s*(ta|kg|l|litr)\s+(\d+)$', line, re.IGNORECASE)
+        match2 = re.match(r'^(\d+(?:\.\d+)?)\s*(ta|kg|l|litr)\s+(.*?)\s+(\d+)$', line, re.IGNORECASE)
         match3 = re.search(r'^(.*?)\s+(\d+)$', line, re.IGNORECASE)
 
         item_name = ""
@@ -35,16 +36,27 @@ def parse_expense_text(text: str):
 
         if match1:
             name = match1.group(1).strip().capitalize()
-            count = int(match1.group(2))
-            price = int(match1.group(3))
-            item_name = f"{name} {count} ta"
-            amount = count * price
+            count = float(match1.group(2))
+            unit = match1.group(3).lower()
+            price = int(match1.group(4))
+            
+            # Kasr son bo'lmasa butun songa aylantiramiz (masalan 2.0 emas 2 bo'lishi uchun)
+            count_display = int(count) if count.is_integer() else count
+            
+            item_name = f"{name} {count_display} {unit}"
+            amount = int(count * price)
+            
         elif match2:
-            count = int(match2.group(1))
-            name = match2.group(2).strip().capitalize()
-            price = int(match2.group(3))
-            item_name = f"{name} {count} ta"
-            amount = count * price
+            count = float(match2.group(1))
+            unit = match2.group(2).lower()
+            name = match2.group(3).strip().capitalize()
+            price = int(match2.group(4))
+            
+            count_display = int(count) if count.is_integer() else count
+            
+            item_name = f"{name} {count_display} {unit}"
+            amount = int(count * price)
+            
         elif match3:
             item_name = match3.group(1).strip().capitalize()
             amount = int(match3.group(2))
@@ -58,4 +70,4 @@ def parse_expense_text(text: str):
             "category": category
         })
 
-    return results # Endi bitta xarajat emas, ro'yxat (spiska) qaytaradi
+    return results
