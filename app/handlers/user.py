@@ -10,6 +10,7 @@ from config import DB_PATH, TIMEZONE
 
 user_router = Router()
 
+# 1. COMMANDS
 @user_router.message(CommandStart())
 async def cmd_start(message: types.Message):
     full_name = message.from_user.full_name
@@ -20,6 +21,7 @@ async def cmd_start(message: types.Message):
         reply_markup=get_main_menu()
     )
 
+# 2. SPECIFIC BUTTON HANDLERS (Tepada turishi shart)
 @user_router.message(F.text == "⚙️ Sozlamalar")
 async def process_settings(message: types.Message):
     await message.answer("⚙️ Sozlamalar bo'limidasiz. Nima o'zgartiramiz?", reply_markup=get_settings_menu())
@@ -64,19 +66,56 @@ async def process_report(message: types.Message):
     
     await message.answer(report_text, parse_mode="Markdown")
 
-# FOYDALANUVCHI XARAJAT YOZGANDA ISHLAYDIGAN ASOSIY FUNKSIYA
+# 3. OXIRGI XARAJATNI BEKOR QILISH (TOZALASH) FUNKSIYASI
+@user_router.message(F.text == "🗑 Tozalash")
+async def process_undo_last(message: types.Message):
+    tz = pytz.timezone(TIMEZONE)
+    today = datetime.now(tz).strftime("%Y-%m-%d")
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Foydalanuvchining bugungi oxirgi xarajatini topamiz
+    cursor.execute("""
+        SELECT rowid, item_name, amount 
+        FROM expenses 
+        WHERE user_id = ? AND date = ? 
+        ORDER BY rowid DESC LIMIT 1
+    """, (message.from_user.id, today))
+    
+    last_record = cursor.fetchone()
+    
+    if not last_record:
+        await message.answer("🤷‍♂️ Bugun uchun o'chirishga hech qanday xarajat topilmadi.")
+        conn.close()
+        return
+        
+    rowid, item_name, amount = last_record
+    
+    # Topilgan oxirgi xarajatni bazadan o'chiramiz
+    cursor.execute("DELETE FROM expenses WHERE rowid = ?", (rowid,))
+    conn.commit()
+    conn.close()
+    
+    await message.answer(
+        f"🗑 **O'chirildi!**\n\n"
+        f"Bekor qilingan xarajat:\n"
+        f"🔹 {item_name} — {amount:,} so'm\n\n"
+        f"Ushbu summa bugungi hisobotdan muvaffaqiyatli olib tashlandi. ✅", 
+        parse_mode="Markdown"
+    )
+
+# 4. GENERAL INPUT HANDLER (Eng pastda turishi shart)
 @user_router.message(F.text)
 async def process_expense_input(message: types.Message):
     text = message.text.strip()
     
-    # 1. Matnni xizmat orqali aqlli tahlil qilish (endi u ro'yxat qaytaradi)
     parsed_items = parse_expense_text(text)
     
     if not parsed_items:
         await message.answer("⚠️ Iltimos, xarajatni to'g'ri kiriting.\nMasalan:\n`Non 18000`\n`Gril 4 ta 62000`")
         return
         
-    # 2. Vaqt va sanani olish
     tz = pytz.timezone(TIMEZONE)
     now = datetime.now(tz)
     current_date = now.strftime("%Y-%m-%d")
@@ -88,7 +127,6 @@ async def process_expense_input(message: types.Message):
     total_sum = 0
     response_text = f"✅ **Xarajatlar saqlandi!**\n📅 Vaqt: {current_date} {current_time}\n\n"
     
-    # 3. Ro'yxatdagi har bir xarajatni alohida saqlaymiz va javobni shakllantiramiz
     for item in parsed_items:
         item_name = item['item_name']
         amount = item['amount']
@@ -105,7 +143,6 @@ async def process_expense_input(message: types.Message):
     conn.commit()
     conn.close()
     
-    # Agar bittadan ko'p narsa yozilgan bo'lsa, umumiy summani ham ko'rsatamiz
     if len(parsed_items) > 1:
         response_text += f"\n━━━━━━━━━━\n💰 **Chek bo'yicha jami: {total_sum:,} so'm**"
         
