@@ -5,8 +5,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Bot sozlamalari
-TOKEN = os.getenv("TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
+TOKEN = os.getenv("8522306001:AAFNLspuu9QEX0wCGvzohK69Bf2qietscXQ")
+ADMIN_ID = int(os.getenv("1002593949", 0))
 
 # Web Server sozlamalari (Render uchun)
 PORT = int(os.getenv("PORT", 5000))
