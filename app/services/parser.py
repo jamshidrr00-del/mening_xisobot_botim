@@ -1,73 +1,53 @@
 import re
 
-def get_category(item_name: str) -> str:
-    """Kategoriyalarni avtomatik aniqlash funksiyasi"""
-    name = item_name.lower()
-    # Magazin ro'yxatiga guruch, makaron kabilarni ham qo'shdik
-    if any(word in name for word in ['non', 'gril', 'suv', 'tuxum', 'yog', 'shakar', 'choy', 'guruch', 'makaron']):
-        return "🛒 Magazin"
-    elif any(word in name for word in ['taxi', 'taksi', 'avtobus', 'metro', 'yol']):
-        return "🚕 Transport"
-    elif any(word in name for word in ['benzin', 'metan', 'prop', 'gaz', 'moy']):
-        return "⛽️ Yoqilg'i"
-    elif any(word in name for word in ['tok', 'svet', 'gaz puli', 'suv puli', 'musor']):
-        return "💡 Komunal"
-    return "🎁 Boshqa"
+# TZ bo'yicha avtomatik kategoriya topish uchun lug'at
+CATEGORY_MAPPING = {
+    "🛒 Magazin": ["non", "sut", "qatiq", "tuxum", "suv", "olma", "kartoshka", "piyoz", "go'sht", "choy", "shakar", "makaron"],
+    "🚕 Transport": ["taxi", "taksi", "avtobus", "metro", "yo'l", "yol"],
+    "💊 Apteka": ["dori", "paratsetamol", "analgin", "maz", "apteka", "bint", "shprits", "vitamin"],
+    "⛽️ Yoqilg'i": ["ai80", "ai91", "ai92", "benzin", "gaz", "metan", "propan", "zapravka"],
+    "🍔 Kafe": ["kafe", "osh", "somsa", "kofe", "burger", "lavash", "hotdog", "shashlik", "choyxona"],
+    "💡 Kommunal": ["svet", "tok", "suv", "gaz", "musor", "kvitansiya"],
+    "🌐 Internet": ["internet", "wifi", "uzmobile", "beeline", "ucell", "mobiuz", "paynet"]
+}
+
+def determine_category(item_name: str) -> str:
+    """Xarajat nomiga qarab uning kategoriyasini avtomatik aniqlash"""
+    name_lower = item_name.lower()
+    
+    for category, keywords in CATEGORY_MAPPING.items():
+        for keyword in keywords:
+            # Agar mahsulot nomi ichida kalit so'z bo'lsa (masalan "2 ta non" ichida "non" bor)
+            if keyword in name_lower:
+                return category
+                
+    return "🎁 Boshqa" # Hech qaysiga tushmasa
 
 def parse_expense_text(text: str):
-    # Vergullarni ham yangi qatorga aylantirib olamiz (qulaylik uchun)
-    text = text.replace(',', '\n')
-    lines = text.strip().split('\n')
+    """Foydalanuvchi matnidan nom, miqdor va summani ajratib olish"""
+    # Matn ichidan barcha raqamlarni topamiz (masalan, "2 ta non 36000" -> ['2', '36000'])
+    numbers = re.findall(r'\d+', text)
     
-    results = []
-
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-            
-        # Qoliplarni tekshirish (ta, kg, l, litr va kasr sonlar masalan 1.5 kg qo'shildi)
-        match1 = re.match(r'^(.*?)\s+(\d+(?:\.\d+)?)\s*(ta|kg|l|litr)\s+(\d+)$', line, re.IGNORECASE)
-        match2 = re.match(r'^(\d+(?:\.\d+)?)\s*(ta|kg|l|litr)\s+(.*?)\s+(\d+)$', line, re.IGNORECASE)
-        match3 = re.search(r'^(.*?)\s+(\d+)$', line, re.IGNORECASE)
-
-        item_name = ""
-        amount = 0
-
-        if match1:
-            name = match1.group(1).strip().capitalize()
-            count = float(match1.group(2))
-            unit = match1.group(3).lower()
-            price = int(match1.group(4))
-            
-            # Kasr son bo'lmasa butun songa aylantiramiz (masalan 2.0 emas 2 bo'lishi uchun)
-            count_display = int(count) if count.is_integer() else count
-            
-            item_name = f"{name} {count_display} {unit}"
-            amount = int(count * price)
-            
-        elif match2:
-            count = float(match2.group(1))
-            unit = match2.group(2).lower()
-            name = match2.group(3).strip().capitalize()
-            price = int(match2.group(4))
-            
-            count_display = int(count) if count.is_integer() else count
-            
-            item_name = f"{name} {count_display} {unit}"
-            amount = int(count * price)
-            
-        elif match3:
-            item_name = match3.group(1).strip().capitalize()
-            amount = int(match3.group(2))
-        else:
-            continue # Tushunarsiz qatorlarni o'tkazib yuboradi
-
-        category = get_category(item_name)
-        results.append({
-            "item_name": item_name,
-            "amount": amount,
-            "category": category
-        })
-
-    return results
+    if not numbers:
+        return None # Raqam topilmadi
+        
+    # Qoidaga ko'ra, eng oxirgi yozilgan raqam doim JAMI SUMMA hisoblanadi
+    amount = int(numbers[-1])
+    
+    # Summani olib tashlab, qolganini mahsulot nomi deb olamiz
+    item_name = text.replace(str(amount), "", 1).strip()
+    
+    # Ortiqcha belgilarni (-, =, :, bo'sh joy) tozalaymiz
+    item_name = re.sub(r'^[ \t\r\n\-\:\=\+]+|[ \t\r\n\-\:\=\+]+$', '', item_name).strip()
+    
+    if not item_name:
+        item_name = "Xarajat"
+        
+    # Kategoriyani avtomatik aniqlaymiz
+    category = determine_category(item_name)
+    
+    return {
+        "item_name": item_name,
+        "amount": amount,
+        "category": category
+    }
