@@ -9,7 +9,7 @@ from aiogram import Bot, Dispatcher, F, Router, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from flask import Flask
 
 # DB faylidan funksiyalarni import qilish
@@ -23,8 +23,15 @@ from db import (
     get_categories
 )
 
+# Logging sozlamasi
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
 # --- 1. FLASK SERVER (Render 24/7 ishlashi uchun) ---
 app = Flask(__name__)
+
+@app.route('/')
+def index():
+    return "Expense Tracker Bot is running 24/7! 🚀"
 
 @app.route("/")
 def home():
@@ -46,12 +53,34 @@ router = Router()
 class FSM(StatesGroup):
     income = State()
 
-# --- STANDART KATEGoriya YARATISH ---
+# --- BOT BUYRUQLAR MENYUSINI SOZLASH (O'ZBEK TILIDA) ---
+async def set_bot_commands(bot: Bot):
+    commands = [
+        BotCommand(command="start", description="Botni ishga tushirish 🚀"),
+        BotCommand(command="kirim", description="Balansga pul qo'shish 💰"),
+        BotCommand(command="undo", description="Oxirgi xarajatni o'chirish 🗑")
+    ]
+    await bot.set_my_commands(commands)
+
+# --- STANDART KATEGORIYA YARATISH ---
 def seed_default_category():
-    # Xarajatlarni saqlash uchun boshlang'ich kategoriya
     add_category("Umumiy")
 
 # ================= KIRIM (DAROMAD) QISMI =================
+
+@router.message(Command("start"))
+async def cmd_start(message: types.Message):
+    user_id = message.from_user.id
+    add_user(user_id)
+    current_balance = get_balance(user_id)
+    await message.answer(
+        f"Assalomu alaykum! Xarajatlarni hisoblab boruvchi botga xush kelibsiz. 🚀\n\n"
+        f"💳 Joriy balansingiz: {current_balance:,.0f} so'm\n\n"
+        f"Xarajatlarni yozish uchun shunchaki quyidagi formatda yuboring:\n"
+        f"<code>non 4 ta 3000</code>\n"
+        f"<code>shakar 2 kg 10000</code>",
+        parse_mode="HTML"
+    )
 
 @router.message(Command("kirim"))
 async def cmd_kirim(message: types.Message, state: FSMContext):
@@ -68,7 +97,6 @@ async def process_income(message: types.Message, state: FSMContext):
         amount = float(text)
         user_id = message.from_user.id
         
-        # Foydalanuvchini bazaga qo'shish va balansni yangilash
         add_user(user_id)
         update_balance(user_id, amount)
         current_balance = get_balance(user_id)
@@ -90,7 +118,6 @@ async def undo_income(callback: types.CallbackQuery):
     amount = float(callback.data.split("_")[2])
     user_id = callback.from_user.id
 
-    # Kirimni bekor qilish (balansdan ayirish)
     update_balance(user_id, -amount)
     current_balance = get_balance(user_id)
 
@@ -110,13 +137,11 @@ async def process_expense(message: types.Message):
     add_user(user_id)
     lines = message.text.strip().split('\n')
 
-    # Matnni qidiruvchi formula: (Nomi) (Soni) (O'lchovi) (Narxi)
     pattern = re.compile(r"^(.*?)\s+(\d+(?:\.\d+)?)\s*(ta|kg|l|litr|m|metr)\s+([\d\s]+)$", re.IGNORECASE)
 
     response_lines = []
     total_expense = 0
     
-    # Toshkent vaqti bo'yicha sana va vaqtni olish
     tz = pytz.timezone("Asia/Tashkent")
     now = datetime.now(tz)
     date_str = now.strftime("%Y-%m-%d")
@@ -141,7 +166,6 @@ async def process_expense(message: types.Message):
 
             item_full_name = f"{name} ({qty} {unit})"
             
-            # Bazaga xarajatni yozish (bu funksiya o'zi balansdan avtomatik ayiradi)
             add_expense(
                 user_id=user_id,
                 amount=line_total,
@@ -175,7 +199,6 @@ async def undo_expense(callback: types.CallbackQuery):
     amount = float(callback.data.split("_")[2])
     user_id = callback.from_user.id
 
-    # Xarajat bekor qilinganda pulni balansga qaytarish
     update_balance(user_id, amount)
     current_balance = get_balance(user_id)
 
@@ -187,21 +210,21 @@ async def undo_expense(callback: types.CallbackQuery):
 # ================= ASOSIY ISHGA TUSHIRISH =================
 
 async def main():
-    # Bazani va boshlang'ich ma'lumotlarni shakllantirish
     init_db()
     seed_default_category()
 
     # Flask serverni alohida oqimda ishga tushirish (Render uchun)
     threading.Thread(target=run_flask, daemon=True).start()
 
-    # Botni ishga tushirish
+    # Router va menyularni ulash
     dp.include_router(router)
     await bot.delete_webhook(drop_pending_updates=True)
-    logging.info("Bot ishga tushdi...")
+    await set_bot_commands(bot)
+    
+    logging.info("Telegram bot ishga tushdi...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
