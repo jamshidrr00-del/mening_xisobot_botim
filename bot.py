@@ -1,237 +1,173 @@
-import asyncio
-import logging
 import os
-import re
 import sqlite3
-import threading
-from aiogram import Bot, Dispatcher, F, Router, types
+import logging
+import asyncio
+from datetime import datetime
+import pytz
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from flask import Flask
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# --- 1. FLASK SERVER (Render 24/7 ishlashi uchun) ---
-app = Flask(__name__)
+# Loglarni sozlash
+logging.basicConfig(level=logging.INFO)
 
+# Bot tokeni (Render'dagi Environment Variables'dan olinadi)
+TOKEN = os.getenv("TOKEN")
 
-@app.route("/")
-def home():
-  return "Bot is active!"
-
-
-def run_flask():
-  port = int(os.environ.get("PORT", 10000))
-  app.run(host="0.0.0.0", port=port)
-
-
-# --- 2. BAZA BILAN ISHLASH (SQLite) ---
-DB_PATH = "database.db"
-
-
-def init_db():
-  conn = sqlite3.connect(DB_PATH)
-  cursor = conn.cursor()
-  cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            balance REAL DEFAULT 0
-        )
-    """)
-  conn.commit()
-  conn.close()
-
-
-def add_user(user_id):
-  conn = sqlite3.connect(DB_PATH)
-  cursor = conn.cursor()
-  cursor.execute(
-      "INSERT OR IGNORE INTO users (user_id, balance) VALUES (?, 0)", (user_id,)
-  )
-  conn.commit()
-  conn.close()
-
-
-def update_balance(user_id, amount):
-  conn = sqlite3.connect(DB_PATH)
-  cursor = conn.cursor()
-  cursor.execute(
-      "UPDATE users SET balance = balance + ? WHERE user_id = ?",
-      (amount, user_id),
-  )
-  conn.commit()
-  conn.close()
-
-
-def get_balance(user_id):
-  conn = sqlite3.connect(DB_PATH)
-  cursor = conn.cursor()
-  cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
-  row = cursor.fetchone()
-  conn.close()
-  return row[0] if row else 0
-
-
-# --- 3. BOT SOZLAMALARI ---
-TOKEN = os.getenv("BOT_TOKEN")
-if not TOKEN:
-  raise ValueError("BOT_TOKEN topilmadi! Render Environment'ga qo'shing.")
+# DIQQAT: Quyidagi 12345678 o'rniga o'zingizning haqiqiy Telegram ID raqamingizni yozing!
+USER_ID = 1002593949  
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
-router = Router()
+scheduler = AsyncIOScheduler()
 
+# Toshkent vaqt zonasi
+TASHKENT_TZ = pytz.timezone('Asia/Tashkent')
 
-class FSM(StatesGroup):
-  income = State()
-
-
-# ================= KIRIM (DAROMAD) QISMI =================
-
-
-@router.message(Command("kirim"))
-async def cmd_kirim(message: types.Message, state: FSMContext):
-  await message.answer(
-      "💰 Balansga qo'shmoqchi bo'lgan summani kiriting (masalan: 1500000 yoki 15"
-      " 000 000):"
-  )
-  await state.set_state(FSM.income)
-
-
-@router.message(F.state == FSM.income, F.text)
-async def process_income(message: types.Message, state: FSMContext):
-  text = re.sub(r"\s+", "", message.text)
-
-  if text.isdigit():
-    amount = int(text)
-    user_id = message.from_user.id
-    add_user(user_id)
-
-    update_balance(user_id, amount)
-    current_balance = get_balance(user_id)
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(
-            text="🗑 Oxirgi kirimni o'chirish", callback_data=f"undo_inc_{amount}"
+# Ma'lumotlar bazasini sozlash (SQLite)
+def init_db():
+    conn = sqlite3.connect('expenses.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS expenses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            amount INTEGER,
+            category TEXT,
+            date TEXT,
+            is_closed INTEGER DEFAULT 0
         )
-    ]])
+    ''')
+    conn.commit()
+    conn.close()
 
-    await message.answer(
-        f"✅ Balansga {amount:,.0f} so'm qo'shildi.\n💳 Joriy balans:"
-        f" {current_balance:,.0f} so'm",
-        reply_markup=kb,
+init_db()
+
+# Kategoriyalar ro'yxati
+CATEGORIES = {
+    "food": "🍔 Ovqat",
+    "transport": "🚕 Yo'l",
+    "market": "🛒 Bozorlik",
+    "utilities": "💡 Kommunal",
+    "other": "🎁 Boshqa"
+}
+
+# Start buyrug'i
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message):
+    if message.from_user.id != USER_ID:
+        return
+    await message.answer("Salom! Men sizning Kunlik Xarajatlar botingizman.\n"
+                         "Xarajat kiritish uchun shunchaki summani raqamda yuboring.\n"
+                         "Hisobot olish uchun /hisobot buyrug'ini bosing.")
+
+# Xarajat miqdori yuborilganda kategoriyani so'rash
+@dp.message(F.text.regexp(r'^\d+$'))
+async def process_amount(message: types.Message):
+    if message.from_user.id != USER_ID:
+        return
+    
+    amount = int(message.text)
+    
+    # Kategoriya tanlash uchun tugmalar (Inline Buttons)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=name, callback_data=f"exp_{amount}_{key}")]
+        for key, name in CATEGORIES.items()
+    ])
+    
+    await message.answer(f"💰 {amount:,} so'm xarajat uchun kategoriya tanlang:", reply_markup=keyboard)
+
+# Kategoriya bosilganda bazaga saqlash
+@dp.callback_query(F.data.startswith("exp_"))
+async def save_expense(callback: types.CallbackQuery):
+    _, amount, cat_key = callback.data.split("_")
+    category_name = CATEGORIES[cat_key]
+    current_date = datetime.now(TASHKENT_TZ).strftime("%Y-%m-%d")
+    
+    conn = sqlite3.connect('expenses.db')
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO expenses (user_id, amount, category, date) VALUES (?, ?, ?, ?)",
+        (callback.from_user.id, int(amount), category_name, current_date)
     )
-    await state.clear()
-  else:
-    await message.answer(
-        "❌ Noto'g'ri summa kiritildi. Iltimos, faqat raqam kiriting:"
+    conn.commit()
+    conn.close()
+    
+    await callback.message.edit_text(f"✅ Saqlandi:\n📅 Sana: {current_date}\n🗂 Kategoriya: {category_name}\n💰 Summa: {int(amount):,} so'm")
+    await callback.answer()
+
+# Hisobot tayyorlash funksiyasi
+def generate_report_text(date_str):
+    conn = sqlite3.connect('expenses.db')
+    cursor = conn.cursor()
+    
+    # Kategoriyalar bo'yicha guruhlash
+    cursor.execute(
+        "SELECT category, SUM(amount) FROM expenses WHERE date = ? GROUP BY category", 
+        (date_str,)
     )
+    rows = cursor.fetchall()
+    
+    # Umumiy summani hisoblash
+    cursor.execute("SELECT SUM(amount) FROM expenses WHERE date = ?", (date_str,))
+    total = cursor.fetchone()[0] or 0
+    
+    conn.close()
+    
+    if total == 0:
+        return f"📅 {date_str} kuni hech qanday xarajat qilinmadi. 🤝"
+        
+    report = f"📊 **Kunlik Xarajatlar Hisoboti**\n📅 Sana: {date_str}\n"
+    report += "-----------------------------\n"
+    for row in rows:
+        report += f"{row[0]}: {row[1]:,} so'm\n"
+    report += "-----------------------------\n"
+    report += f"💰 **JAMI:** {total:,} so'm"
+    return report
 
+# Hisobot buyrug'i (Qo'lda so'ralganda)
+@dp.message(Command("hisobot"))
+async def cmd_report(message: types.Message):
+    if message.from_user.id != USER_ID:
+        return
+    current_date = datetime.now(TASHKENT_TZ).strftime("%Y-%m-%d")
+    report_text = generate_report_text(current_date)
+    await message.answer(report_text, parse_mode="Markdown")
 
-@router.callback_query(F.data.startswith("undo_inc_"))
-async def undo_income(callback: types.CallbackQuery):
-  amount = int(callback.data.split("_")[2])
-  user_id = callback.from_user.id
+# Soat 22:00 da avtomatik ishlaydigan funksiya
+async def auto_daily_report():
+    current_date = datetime.now(TASHKENT_TZ).strftime("%Y-%m-%d")
+    
+    conn = sqlite3.connect('expenses.db')
+    cursor = conn.cursor()
+    
+    # Kun yopilgan yoki yopilmaganini tekshirish
+    cursor.execute("SELECT COUNT(*) FROM expenses WHERE date = ? AND is_closed = 0", (current_date,))
+    open_expenses = cursor.fetchone()[0]
+    
+    if open_expenses > 0:
+        # Hisobot matnini tayyorlash
+        report_text = "⏰ **Soat 22:00 bo'ldi! Kunlik avtomat hisobot:**\n\n" + generate_report_text(current_date)
+        
+        # Foydalanuvchiga yuborish
+        try:
+            await bot.send_message(chat_id=USER_ID, text=report_text, parse_mode="Markdown")
+            # Kunni yopilgan deb belgilash
+            cursor.execute("UPDATE expenses SET is_closed = 1 WHERE date = ?", (current_date,))
+            conn.commit()
+        except Exception as e:
+            logging.error(f"Avtomat hisobot yuborishda xato: {e}")
+            
+    conn.close()
 
-  update_balance(user_id, -amount)
-  current_balance = get_balance(user_id)
-
-  await callback.message.edit_text(
-      f"🗑 {amount:,.0f} so'm kirim bekor qilindi.\n💳 Joriy balans:"
-      f" {current_balance:,.0f} so'm"
-  )
-  await callback.answer("Kirim o'chirildi")
-
-
-# ================= XARAJAT QISMI (BUYRUQLARSIZ) =================
-
-
-@router.message(F.text)
-async def process_expense(message: types.Message):
-  if message.text.startswith("/"):
-    return
-
-  user_id = message.from_user.id
-  add_user(user_id)
-  lines = message.text.strip().split("\n")
-
-  pattern = re.compile(
-      r"^(.*?)\s+(\d+(?:\.\d+)?)\s*(ta|kg|l|litr|m|metr)\s+([\d\s]+)$",
-      re.IGNORECASE,
-  )
-
-  response_lines = []
-  total_expense = 0
-
-  for line in lines:
-    match = pattern.match(line.strip())
-    if match:
-      name = match.group(1).strip().capitalize()
-      qty_str = match.group(2)
-      qty = float(qty_str) if "." in qty_str else int(qty_str)
-      unit = match.group(3).strip().lower()
-
-      price_str = match.group(4)
-      price = int(re.sub(r"\s+", "", price_str))
-
-      line_total = qty * price
-      total_expense += line_total
-
-      response_lines.append(f"✅ {name} {qty} {unit} {int(line_total)} so'm")
-
-  if response_lines:
-    update_balance(user_id, -total_expense)
-    current_balance = get_balance(user_id)
-
-    final_text = "\n".join(response_lines)
-    final_text += f"\n\n💳 Joriy balans: {current_balance:,.0f} so'm"
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(
-            text="🗑 Xarajatni bekor qilish",
-            callback_data=f"undo_exp_{total_expense}",
-        )
-    ]])
-
-    await message.answer(final_text, reply_markup=kb)
-  else:
-    await message.answer(
-        "⚠️ Iltimos, xarajatni quyidagi formatda kiriting:\n\nnon 4 ta"
-        " 3000\nshakar 2 kg 10000"
-    )
-
-
-@router.callback_query(F.data.startswith("undo_exp_"))
-async def undo_expense(callback: types.CallbackQuery):
-  amount = int(callback.data.split("_")[2])
-  user_id = callback.from_user.id
-
-  update_balance(user_id, amount)
-  current_balance = get_balance(user_id)
-
-  await callback.message.edit_text(
-      f"🗑 Xarajat bekor qilindi va {amount:,.0f} so'm balansga qaytarildi.\n💳"
-      f" Joriy balans: {current_balance:,.0f} so'm"
-  )
-  await callback.answer("Xarajat bekor qilindi")
-
-
-# ================= ASOSIY ISHGA TUSHIRISH =================
-
-
+# Bot ishga tushganda tahrirlarni sozlash
 async def main():
-  init_db()
-  threading.Thread(target=run_flask, daemon=True).start()
-
-  dp.include_router(router)
-  await bot.delete_webhook(drop_pending_updates=True)
-  logging.info("Bot ishga tushdi...")
-  await dp.start_polling(bot)
-
+    # Har kuni soat 22:00 da avtomat hisobot yuborish taymeri
+    scheduler.add_job(auto_daily_report, 'cron', hour=22, minute=0, timezone=TASHKENT_TZ)
+    scheduler.start()
+    
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-  logging.basicConfig(level=logging.INFO)
-  try:
     asyncio.run(main())
-  except (KeyboardInterrupt, SystemExit):
-    logging.info("Bot to'xtatildi.")
