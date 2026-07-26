@@ -216,7 +216,7 @@ async def undo_expense(callback: types.CallbackQuery):
   await callback.answer("Xarajat bekor qilindi")
 
 
-# ================= ASOSIY ISHGA TUSHIRISH QISMI =================
+# ================= ASOSIY ISHGA TUSHIRISH =================
 
 
 async def main():
