@@ -73,7 +73,10 @@ def get_balance(user_id):
 
 
 # --- 3. BOT SOZLAMALARI ---
-TOKEN = os.getenv("BOT_TOKEN")  # Render Environment'dan tokenni oladi
+TOKEN = os.getenv("BOT_TOKEN")
+if not TOKEN:
+  raise ValueError("BOT_TOKEN topilmadi! Render Environment'ga qo'shing.")
+
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 router = Router()
@@ -217,13 +220,9 @@ async def undo_expense(callback: types.CallbackQuery):
 
 
 async def main():
-  # Bazani va jadvalni yaratish
   init_db()
-
-  # Flask serverni alohida oqimda ishga tushirish (Render uchun)
   threading.Thread(target=run_flask, daemon=True).start()
 
-  # Bot routerini ulash va ishga tushirish
   dp.include_router(router)
   await bot.delete_webhook(drop_pending_updates=True)
   logging.info("Bot ishga tushdi...")
