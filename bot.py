@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO)
 TOKEN = os.getenv("TOKEN")
 
 # DIQQAT: Quyidagi 12345678 o'rniga o'zingizning haqiqiy Telegram ID raqamingizni yozing!
-USER_ID = 12345678  
+USER_ID = 1002593949  
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
