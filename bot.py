@@ -12,8 +12,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from flask import Flask
 
-# DB faylidan funksiyalarni import qilish
-from db import (
+# DB faylidan funksiyalarni import qilish (To'g'rilangan yo'lak)
+from app.database.db import (
     init_db,
     add_user,
     update_balance,
