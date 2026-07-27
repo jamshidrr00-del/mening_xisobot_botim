@@ -79,7 +79,7 @@ def determine_category(name: str) -> str:
         return "Apteka"
     elif any(w in name_lower for w in ["sement", "kraska", "mix", "truba", "kafel", "shurup", "bolt", "qum"]):
         return "Stroy magazin"
-    elif any(w in name_lower for w in ["non", "shakar", "un", "kartoshka", "sariyog", "yog'", "yog", "sut", "choy", "go'sht", "gosht", "tuxum", "guruch", "makaron", "kolbasa", "sir", "tuz", "meva", "sabzi", "piyoz"]):
+    elif any(w in name_lower for w in ["non", "shakar", "un", "kartoshka", "sariyog", "yog'", "yog", "sut", "choy", "go'sht", "gosht", "tuxum", "guruch", "makaron", "kolbasa", "sir", "tuz", "meva", "sabzi", "piyoz", "garox"]):
         return "Magazin"
     else:
         return "Boshqa"
@@ -93,14 +93,14 @@ async def cmd_start(message: types.Message):
     current_balance = get_balance(user_id)
     await message.answer(
         f"Assalomu alaykum! Xarajatlarni hisoblab boruvchi botga xush kelibsiz. 🚀\n\n"
-        f"💳 Joriy balansingiz: {current_balance:,.0f} so'm\n\n"
-        f"📥 **Kirim qilish 2 usulda:**\n"
-        f"1️⃣ `/kirim` yoki `/kirim 15 000 000`\n"
-        f"2️⃣ `+ 15 000 000` yoki `maosh 15 000 000`\n\n"
-        f"❌ **Oxirgi kirimni o'chirish:** `/kirim_ochirish`\n\n"
-        f"🛒 **Xarajat qilish 2 usulda:**\n"
-        f"1️⃣ `non 2 ta 3500`\n"
-        f"2️⃣ `sariyog 15000`",
+        f"💳 <b>Joriy balansingiz:</b> {current_balance:,.0f} so'm\n\n"
+        f"📥 <b>Kirim qilish 2 usulda:</b>\n"
+        f"1️⃣ <code>/kirim</code> yoki <code>/kirim 15 000 000</code>\n"
+        f"2️⃣ <code>+ 15 000 000</code> yoki <code>maosh 15 000 000</code>\n\n"
+        f"❌ <b>Oxirgi kirimni o'chirish:</b> <code>/kirim_ochirish</code>\n\n"
+        f"🛒 <b>Xarajat qilish 2 usulda:</b>\n"
+        f"1️⃣ <code>non 2 ta 3500</code>\n"
+        f"2️⃣ <code>sariyog 15000</code>",
         parse_mode="HTML"
     )
 
@@ -122,7 +122,6 @@ async def cmd_kirim(message: types.Message, state: FSMContext):
         if text_clean.isdigit():
             amount = float(text_clean)
             
-            # Bazaga yozish va oxirgi kirimni saqlash
             conn = get_connection()
             cursor = conn.cursor()
             cursor.execute("UPDATE users SET balance = balance + ?, last_income = ? WHERE user_id = ?", (amount, amount, user_id))
@@ -371,59 +370,75 @@ async def process_text_message(message: types.Message):
     date_str = now.strftime("%Y-%m-%d")
     time_str = now.strftime("%H:%M")
 
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, name FROM categories")
-    cat_rows = cursor.fetchall()
-    cat_dict = {name.lower(): cat_id for cat_id, name in cat_rows}
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name FROM categories")
+        cat_rows = cursor.fetchall()
+        cat_dict = {name.lower(): cat_id for cat_id, name in cat_rows}
 
-    for line in lines:
-        line_text = line.strip()
-        if not line_text:
-            continue
+        for line in lines:
+            line_text = line.strip()
+            if not line_text:
+                continue
 
-        match_income = pattern_income.match(line_text)
-        match_unit = pattern_unit.match(line_text)
-        match_simple = pattern_simple.match(line_text)
+            match_income = pattern_income.match(line_text)
+            match_unit = pattern_unit.match(line_text)
+            match_simple = pattern_simple.match(line_text)
 
-        if match_income:
-            price_str = match_income.group(2)
-            inc_amount = float(re.sub(r'\s+', '', price_str))
-            cursor.execute("UPDATE users SET balance = balance + ?, last_income = ? WHERE user_id = ?", (inc_amount, inc_amount, user_id))
-            total_income_added += inc_amount
-        elif match_unit:
-            name = match_unit.group(1).strip().capitalize()
-            qty_str = match_unit.group(2)
-            qty = float(qty_str) if '.' in qty_str else int(qty_str)
-            unit = match_unit.group(3).strip().lower()
-            price_str = match_unit.group(4)
-            price = float(re.sub(r'\s+', '', price_str))
-            
-            line_total = qty * price
-            item_full_name = f"{name} {qty} {unit}"
+            if match_income:
+                price_str = match_income.group(2)
+                inc_amount = float(re.sub(r'\s+', '', price_str))
+                cursor.execute("UPDATE users SET balance = balance + ?, last_income = ? WHERE user_id = ?", (inc_amount, inc_amount, user_id))
+                total_income_added += inc_amount
+            elif match_unit:
+                name = match_unit.group(1).strip().capitalize()
+                qty_str = match_unit.group(2)
+                qty = float(qty_str) if '.' in qty_str else int(qty_str)
+                unit = match_unit.group(3).strip().lower()
+                price_str = match_unit.group(4)
+                price = float(re.sub(r'\s+', '', price_str))
+                
+                line_total = qty * price
+                item_full_name = f"{name} {qty} {unit}"
 
-            cat_name = determine_category(name)
-            cat_id = cat_dict.get(cat_name.lower(), 1)
+                cat_name = determine_category(name)
+                cat_id = cat_dict.get(cat_name.lower(), 1)
 
-            add_expense(user_id=user_id, amount=line_total, category_id=cat_id, item_name=item_full_name, date=date_str, time=time_str)
-            total_expense += line_total
-            parsed_expenses.append({"category": cat_name, "name": item_full_name, "amount": line_total})
+                cursor.execute(
+                    "INSERT INTO expenses (user_id, amount, category_id, item_name, date, time) VALUES (?, ?, ?, ?, ?, ?)",
+                    (user_id, line_total, cat_id, item_full_name, date_str, time_str)
+                )
+                total_expense += line_total
+                parsed_expenses.append({"category": cat_name, "name": item_full_name, "amount": line_total})
 
-        elif match_simple:
-            name = match_simple.group(1).strip().capitalize()
-            price_str = match_simple.group(2)
-            line_total = float(re.sub(r'\s+', '', price_str))
-            item_full_name = name
+            elif match_simple:
+                name = match_simple.group(1).strip().capitalize()
+                price_str = match_simple.group(2)
+                line_total = float(re.sub(r'\s+', '', price_str))
+                item_full_name = name
 
-            cat_name = determine_category(name)
-            cat_id = cat_dict.get(cat_name.lower(), 1)
+                cat_name = determine_category(name)
+                cat_id = cat_dict.get(cat_name.lower(), 1)
 
-            add_expense(user_id=user_id, amount=line_total, category_id=cat_id, item_name=item_full_name, date=date_str, time=time_str)
-            total_expense += line_total
-            parsed_expenses.append({"category": cat_name, "name": item_full_name, "amount": line_total})
+                cursor.execute(
+                    "INSERT INTO expenses (user_id, amount, category_id, item_name, date, time) VALUES (?, ?, ?, ?, ?, ?)",
+                    (user_id, line_total, cat_id, item_full_name, date_str, time_str)
+                )
+                total_expense += line_total
+                parsed_expenses.append({"category": cat_name, "name": item_full_name, "amount": line_total})
 
-    conn.commit()
-    conn.close()
+        # Agar xarajatlar yozilgan bo'lsa, balansdan xarajat summasini ayirib tashlaymiz
+        if total_expense > 0:
+            cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (total_expense, user_id))
+
+        conn.commit()
+        conn.close()
+
+    except Exception as e:
+        logging.error(f"Process text error: {e}", exc_info=True)
+        await message.answer("❌ Xatolik yuz berdi. Iltimos, xabarni to'g'ri formatda yuboring.")
+        return
 
     current_balance = get_balance(user_id)
     response_parts = []
@@ -454,8 +469,8 @@ async def process_text_message(message: types.Message):
     else:
         await message.answer(
             "⚠️ Xabarni to'g'ri formatda kiriting:\n\n"
-            "📥 Kirim: `+ 15 000 000` yoki `/kirim 15 000 000`\n"
-            "🛒 Xarajat: `non 2 ta 3500` yoki `sariyog 15000`",
+            "📥 Kirim: <code>+ 15 000 000</code> yoki <code>/kirim 15 000 000</code>\n"
+            "🛒 Xarajat: <code>non 2 ta 3500</code> yoki <code>sariyog 15000</code>",
             parse_mode="HTML"
         )
 
@@ -466,7 +481,6 @@ async def main():
     init_db()
     seed_default_categories()
 
-    # Bazaga last_income ustunini xavfsiz qo'shish (migration)
     conn = get_connection()
     cursor = conn.cursor()
     try:
