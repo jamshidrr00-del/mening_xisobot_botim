@@ -12,7 +12,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from flask import Flask
 
-# DB faylidan funksiyalarni import qilish (To'g'rilangan yo'lak)
+# DB faylidan funksiyalarni import qilish (get_connection qo'shildi)
 from app.database.db import (
     init_db,
     add_user,
@@ -20,7 +20,8 @@ from app.database.db import (
     get_balance,
     add_expense,
     add_category,
-    get_categories
+    get_categories,
+    get_connection
 )
 
 # Logging sozlamasi
@@ -32,10 +33,6 @@ app = Flask(__name__)
 @app.route('/')
 def index():
     return "Expense Tracker Bot is running 24/7! 🚀"
-
-@app.route("/")
-def home():
-    return "Bot is active!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -53,12 +50,13 @@ router = Router()
 class FSM(StatesGroup):
     income = State()
 
-# --- BOT BUYRUQLAR MENYUSINI SOZLASH (O'ZBEK TILIDA) ---
+# --- BOT BUYRUQLAR MENYUSINI SOZLASH ---
 async def set_bot_commands(bot: Bot):
     commands = [
         BotCommand(command="start", description="Botni ishga tushirish 🚀"),
         BotCommand(command="kirim", description="Balansga pul qo'shish 💰"),
-        BotCommand(command="undo", description="Oxirgi xarajatni o'chirish 🗑")
+        BotCommand(command="tozalash", description="Oxirgi xarajatni o'chirish 🗑"),
+        BotCommand(command="kunlik", description="Kunlik hisobot 📊")
     ]
     await bot.set_my_commands(commands)
 
@@ -66,7 +64,7 @@ async def set_bot_commands(bot: Bot):
 def seed_default_category():
     add_category("Umumiy")
 
-# ================= KIRIM (DAROMAD) QISMI =================
+# ================= 1. KIRIM (DAROMAD) QISMI =================
 
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
@@ -84,9 +82,7 @@ async def cmd_start(message: types.Message):
 
 @router.message(Command("kirim"))
 async def cmd_kirim(message: types.Message, state: FSMContext):
-    await message.answer(
-        "💰 Balansga qo'shmoqchi bo'lgan summani kiriting (masalan: 1_500_000):"
-    )
+    await message.answer("💰 Balansga qo'shmoqchi bo'lgan summani kiriting (masalan: 1 500 000):")
     await state.set_state(FSM.income)
 
 @router.message(F.state == FSM.income, F.text)
@@ -101,6 +97,7 @@ async def process_income(message: types.Message, state: FSMContext):
         update_balance(user_id, amount)
         current_balance = get_balance(user_id)
 
+        # Bekor qilish tugmasi FAQAT kirim uchun qoldi
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🗑 Oxirgi kirimni o'chirish", callback_data=f"undo_inc_{int(amount)}")]
         ])
@@ -126,7 +123,72 @@ async def undo_income(callback: types.CallbackQuery):
     )
     await callback.answer("Kirim o'chirildi")
 
-# ================= XARAJAT QISMI (BUYRUQLARSIZ) =================
+
+# ================= 2. MENYU BUYRUQLARI (TOZALASH VA KUNLIK) =================
+
+@router.message(Command("tozalash"))
+async def cmd_tozalash(message: types.Message):
+    user_id = message.from_user.id
+    
+    # Ma'lumotlar bazasiga bevosita ulanib, eng oxirgi xarajatni topamiz
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT id, amount, item_name FROM expenses 
+        WHERE user_id = ? ORDER BY id DESC LIMIT 1
+    ''', (user_id,))
+    row = cursor.fetchone()
+    
+    if row:
+        exp_id, amount, item_name = row
+        # 1. Baza yozuvidan o'chirish
+        cursor.execute('DELETE FROM expenses WHERE id = ?', (exp_id,))
+        # 2. Pulni foydalanuvchi balansiga qaytarish
+        cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, user_id))
+        conn.commit()
+        
+        current_balance = get_balance(user_id)
+        await message.answer(
+            f"🗑 <b>Oxirgi xarajat bekor qilindi:</b>\n"
+            f"🔸 {item_name} — {int(amount):,} so'm\n\n"
+            f"💳 Joriy balans: {current_balance:,.0f} so'm",
+            parse_mode="HTML"
+        )
+    else:
+        await message.answer("⚠️ Bekor qilish uchun xarajatlar tarixi topilmadi.")
+    
+    conn.close()
+
+@router.message(Command("kunlik"))
+async def cmd_kunlik(message: types.Message):
+    user_id = message.from_user.id
+    tz = pytz.timezone("Asia/Tashkent")
+    today = datetime.now(tz).strftime("%Y-%m-%d")
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT item_name, amount, time FROM expenses 
+        WHERE user_id = ? AND date = ?
+    ''', (user_id, today))
+    rows = cursor.fetchall()
+    conn.close()
+    
+    if not rows:
+        await message.answer(f"📅 <b>{today}</b>\n\nBugun uchun xarajatlar yo'q. 🤷‍♂️", parse_mode="HTML")
+        return
+        
+    total = sum(row[1] for row in rows)
+    report_lines = [f"📊 <b>Bugungi xarajatlar ({today}):</b>\n"]
+    
+    for row in rows:
+        report_lines.append(f"🔹 {row[0]} — {int(row[1]):,} so'm ({row[2]})")
+    
+    report_lines.append(f"\n💰 <b>Jami kunlik xarajat: {int(total):,} so'm</b>")
+    await message.answer("\n".join(report_lines), parse_mode="HTML")
+
+
+# ================= 3. XARAJAT QISMI (YANGI FORMATDA) =================
 
 @router.message(F.text)
 async def process_expense(message: types.Message):
@@ -139,7 +201,7 @@ async def process_expense(message: types.Message):
 
     pattern = re.compile(r"^(.*?)\s+(\d+(?:\.\d+)?)\s*(ta|kg|l|litr|m|metr)\s+([\d\s]+)$", re.IGNORECASE)
 
-    response_lines = []
+    response_blocks = []
     total_expense = 0
     
     tz = pytz.timezone("Asia/Tashkent")
@@ -164,7 +226,7 @@ async def process_expense(message: types.Message):
             line_total = qty * price
             total_expense += line_total
 
-            item_full_name = f"{name} ({qty} {unit})"
+            item_full_name = f"{name} {qty} {unit}"
             
             add_expense(
                 user_id=user_id,
@@ -175,37 +237,31 @@ async def process_expense(message: types.Message):
                 time=time_str
             )
 
-            response_lines.append(f"✅ {name} {qty} {unit} — {int(line_total):,} so'm")
+            # Siz so'ragan yangi dizayndagi xarajat formati
+            block = (
+                f"📝 Nomi: {item_full_name}\n"
+                f"💰 Summa: {int(line_total):,} so'm\n"
+                f"🗂 Kategoriya: 🎁 Boshqa\n"
+                f"📅 Vaqt: {date_str} {time_str}"
+            )
+            response_blocks.append(block)
 
-    if response_lines:
+    if response_blocks:
         current_balance = get_balance(user_id)
-        final_text = "\n".join(response_lines)
+        
+        # Bloklarni orasini ochiq qilib birlashtiramiz
+        final_text = "\n\n".join(response_blocks)
         final_text += f"\n\n💳 Joriy balans: {current_balance:,.0f} so'm"
 
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🗑 Xarajatni bekor qilish", callback_data=f"undo_exp_{int(total_expense)}")]
-        ])
-
-        await message.answer(final_text, reply_markup=kb)
+        # TUGMA OLIB TASHLANDI: Endi bekor qilish uchun menyudagi /tozalash ishlatiladi
+        await message.answer(final_text)
     else:
         await message.answer(
             "⚠️ Xarajatni quyidagi formatda yuboring:\n\n"
-            "non 4 ta 3000\n"
+            "gril 4 ta 62000\n"
             "shakar 2 kg 10000"
         )
 
-@router.callback_query(F.data.startswith("undo_exp_"))
-async def undo_expense(callback: types.CallbackQuery):
-    amount = float(callback.data.split("_")[2])
-    user_id = callback.from_user.id
-
-    update_balance(user_id, amount)
-    current_balance = get_balance(user_id)
-
-    await callback.message.edit_text(
-        f"🗑 Xarajat bekor qilindi va {amount:,.0f} so'm balansga qaytarildi.\n💳 Joriy balans: {current_balance:,.0f} so'm"
-    )
-    await callback.answer("Xarajat bekor qilindi")
 
 # ================= ASOSIY ISHGA TUSHIRISH =================
 
@@ -213,10 +269,8 @@ async def main():
     init_db()
     seed_default_category()
 
-    # Flask serverni alohida oqimda ishga tushirish (Render uchun)
     threading.Thread(target=run_flask, daemon=True).start()
 
-    # Router va menyularni ulash
     dp.include_router(router)
     await bot.delete_webhook(drop_pending_updates=True)
     await set_bot_commands(bot)
