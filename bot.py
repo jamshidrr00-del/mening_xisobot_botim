@@ -3,7 +3,7 @@ import logging
 import os
 import re
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from aiogram import Bot, Dispatcher, F, Router, types
 from aiogram.filters import Command, StateFilter
@@ -50,13 +50,15 @@ router = Router()
 class FSM(StatesGroup):
     income = State()
 
-# --- BOT BUYRUQLAR MENYUSINI SOZLASH ---
+# --- BOT BUYRUQLAR MENYUSINI SOZLASH (Barchasi qo'shildi) ---
 async def set_bot_commands(bot: Bot):
     commands = [
         BotCommand(command="start", description="Botni ishga tushirish 🚀"),
         BotCommand(command="kirim", description="Balansga pul qo'shish 💰"),
         BotCommand(command="tozalash", description="Oxirgi xarajatni o'chirish 🗑"),
-        BotCommand(command="kunlik", description="Kunlik hisobot 📊")
+        BotCommand(command="kunlik", description="Kunlik hisobot 📊"),
+        BotCommand(command="haftalik", description="Haftalik hisobot 📅"),
+        BotCommand(command="oylik", description="Oylik hisobot 📈")
     ]
     await bot.set_my_commands(commands)
 
@@ -96,7 +98,7 @@ async def cmd_start(message: types.Message):
         f"💳 Joriy balansingiz: {current_balance:,.0f} so'm\n\n"
         f"Xarajatlarni yozish uchun shunchaki quyidagi formatlarda yuboring:\n"
         f"<code>non 2 ta 3500</code>\n"
-        f"<code>sariyog kchayu kotàsi 15000</code>",
+        f"<code>sariyog 15000</code>",
         parse_mode="HTML"
     )
 
@@ -131,19 +133,23 @@ async def process_income(message: types.Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("undo_inc_"))
 async def undo_income(callback: types.CallbackQuery):
-    amount = float(callback.data.split("_")[2])
-    user_id = callback.fromuser.id
+    try:
+        amount = float(callback.data.split("_")[2])
+        user_id = callback.fromuser.id
 
-    update_balance(user_id, -amount)
-    current_balance = get_balance(user_id)
+        update_balance(user_id, -amount)
+        current_balance = get_balance(user_id)
 
-    await callback.message.edit_text(
-        f"🗑 {amount:,.0f} so'm kirim bekor qilindi.\n💳 Joriy balans: {current_balance:,.0f} so'm"
-    )
-    await callback.answer("Kirim o'chirildi")
+        await callback.message.edit_text(
+            f"🗑 {amount:,.0f} so'm kirim bekor qilindi.\n💳 Joriy balans: {current_balance:,.0f} so'm"
+        )
+        await callback.answer("Kirim o'chirildi")
+    except Exception as e:
+        logging.error(f"Undo income error: {e}")
+        await callback.answer("Xatolik yuz berdi yoki allaqachon bajarilgan.", show_alert=True)
 
 
-# ================= 2. MENYU BUYRUQLARI (TOZALASH VA KUNlik) =================
+# ================= 2. MENYU BUYRUQLARI (TOZALASH VA HISOBOTLAR) =================
 
 @router.message(Command("tozalash"))
 async def cmd_tozalash(message: types.Message):
@@ -184,8 +190,10 @@ async def cmd_kunlik(message: types.Message):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute('''
-        SELECT item_name, amount, time FROM expenses 
-        WHERE user_id = ? AND date = ?
+        SELECT c.name, e.item_name, e.amount, e.time 
+        FROM expenses e
+        JOIN categories c ON e.category_id = c.id
+        WHERE e.user_id = ? AND e.date = ?
     ''', (user_id, today))
     rows = cursor.fetchall()
     conn.close()
@@ -194,17 +202,106 @@ async def cmd_kunlik(message: types.Message):
         await message.answer(f"📅 <b>{today}</b>\n\nBugun uchun xarajatlar yo'q. 🤷‍♂️", parse_mode="HTML")
         return
         
-    total = sum(row[1] for row in rows)
+    total = sum(row[2] for row in rows)
+    grouped = {}
+    for cat_name, item_name, amount, time in rows:
+        if cat_name not in grouped:
+            grouped[cat_name] = []
+        grouped[cat_name].append((item_name, amount, time))
+    
     report_lines = [f"📊 <b>Bugungi xarajatlar ({today}):</b>\n"]
+    for cat, items in grouped.items():
+        report_lines.append(f"📂 <b>{cat}:</b>")
+        for item_name, amount, time in items:
+            report_lines.append(f"  • {item_name} — {int(amount):,} so'm ({time})")
+        report_lines.append("")
+        
+    report_lines.append(f"💰 <b>Jami kunlik xarajat: {int(total):,} so'm</b>")
+    await message.answer("\n".join(report_lines), parse_mode="HTML")
+
+@router.message(Command("haftalik"))
+async def cmd_haftalik(message: types.Message):
+    user_id = message.from_user.id
+    tz = pytz.timezone("Asia/Tashkent")
+    now = datetime.now(tz)
+    today_str = now.strftime("%Y-%m-%d")
+    start_of_week = (now - timedelta(days=now.weekday())).strftime("%Y-%m-%d")
     
-    for row in rows:
-        report_lines.append(f"🔹 {row[0]} — {int(row[1]):,} so'm ({row[2]})")
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT c.name, e.item_name, e.amount, e.date 
+        FROM expenses e
+        JOIN categories c ON e.category_id = c.id
+        WHERE e.user_id = ? AND e.date BETWEEN ? AND ?
+        ORDER BY e.date DESC
+    ''', (user_id, start_of_week, today_str))
+    rows = cursor.fetchall()
+    conn.close()
     
-    report_lines.append(f"\n💰 <b>Jami kunlik xarajat: {int(total):,} so'm</b>")
+    if not rows:
+        await message.answer(f"📅 <b>Haftalik hisobot ({start_of_week} — {today_str})</b>\n\nXarajatlar mavjud emas. 🤷‍♂️", parse_mode="HTML")
+        return
+        
+    total = sum(row[2] for row in rows)
+    grouped = {}
+    for cat_name, item_name, amount, date in rows:
+        if cat_name not in grouped:
+            grouped[cat_name] = []
+        grouped[cat_name].append((item_name, amount, date))
+    
+    report_lines = [f"📅 <b>Haftalik xarajatlar ({start_of_week} — {today_str}):</b>\n"]
+    for cat, items in grouped.items():
+        report_lines.append(f"📂 <b>{cat}:</b>")
+        for item_name, amount, date in items:
+            report_lines.append(f"  • {item_name} — {int(amount):,} so'm ({date})")
+        report_lines.append("")
+        
+    report_lines.append(f"💰 <b>Jami haftalik xarajat: {int(total):,} so'm</b>")
+    await message.answer("\n".join(report_lines), parse_mode="HTML")
+
+@router.message(Command("oylik"))
+async def cmd_oylik(message: types.Message):
+    user_id = message.from_user.id
+    tz = pytz.timezone("Asia/Tashkent")
+    now = datetime.now(tz)
+    current_year_month = now.strftime("%Y-%m")
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT c.name, e.item_name, e.amount, e.date 
+        FROM expenses e
+        JOIN categories c ON e.category_id = c.id
+        WHERE e.user_id = ? AND e.date LIKE ?
+        ORDER BY e.date DESC
+    ''', (user_id, f"{current_year_month}%"))
+    rows = cursor.fetchall()
+    conn.close()
+    
+    if not rows:
+        await message.answer(f"📈 <b>Oylik hisobot ({current_year_month})</b>\n\nXarajatlar mavjud emas. 🤷‍♂️", parse_mode="HTML")
+        return
+        
+    total = sum(row[2] for row in rows)
+    grouped = {}
+    for cat_name, item_name, amount, date in rows:
+        if cat_name not in grouped:
+            grouped[cat_name] = []
+        grouped[cat_name].append((item_name, amount, date))
+    
+    report_lines = [f"📈 <b>Oylik xarajatlar ({current_year_month}):</b>\n"]
+    for cat, items in grouped.items():
+        report_lines.append(f"📂 <b>{cat}:</b>")
+        for item_name, amount, date in items:
+            report_lines.append(f"  • {item_name} — {int(amount):,} so'm ({date})")
+        report_lines.append("")
+        
+    report_lines.append(f"💰 <b>Jami oylik xarajat: {int(total):,} so'm</b>")
     await message.answer("\n".join(report_lines), parse_mode="HTML")
 
 
-# ================= 3. XARAJAT QISMI (MOSlashuvchan va Kategoriyalangan) =================
+# ================= 3. XARAJAT QISMI =================
 
 @router.message(StateFilter(None), F.text)
 async def process_expense(message: types.Message):
@@ -215,9 +312,7 @@ async def process_expense(message: types.Message):
     add_user(user_id)
     lines = message.text.strip().split('\n')
 
-    # 1-shablon: [Nomi] [Miqdori] [Birlik] [Narxi] (Masalan: non 2 ta 3500)
     pattern_unit = re.compile(r"^(.*?)\s+(\d+(?:\.\d+)?)\s*(ta|kg|l|litr|m|metr)\s+([\d\s]+)$", re.IGNORECASE)
-    # 2-shablon: [Nomi] [Summasi] (Masalan: sariyog 15000 yoki eski qarz 35000)
     pattern_simple = re.compile(r"^(.*?)\s+([\d\s]+)$", re.IGNORECASE)
 
     parsed_expenses = []
@@ -228,7 +323,6 @@ async def process_expense(message: types.Message):
     date_str = now.strftime("%Y-%m-%d")
     time_str = now.strftime("%H:%M")
 
-    # Kategoriyalarni bazadan olib kelish
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT id, name FROM categories")
@@ -266,11 +360,9 @@ async def process_expense(message: types.Message):
         else:
             continue
 
-        # Avtomatik kategoriya aniqlash
         cat_name = determine_category(name)
         cat_id = cat_dict.get(cat_name.lower(), 1)
 
-        # Bazaga yozish
         add_expense(
             user_id=user_id,
             amount=line_total,
@@ -290,7 +382,6 @@ async def process_expense(message: types.Message):
     if parsed_expenses:
         current_balance = get_balance(user_id)
 
-        # Kategoriyalar bo'yicha guruhlash
         grouped = {}
         for exp in parsed_expenses:
             c = exp["category"]
@@ -304,7 +395,7 @@ async def process_expense(message: types.Message):
             response_lines.append(f"📂 <b>{cat}:</b>")
             for item in items:
                 response_lines.append(f"  • {item['name']} — {int(item['amount']):,} so'm")
-            response_lines.append("") # bo'sh qator
+            response_lines.append("")
 
         response_lines.append(f"💰 <b>Jami summa: {int(total_expense):,} so'm</b>")
         response_lines.append(f"💳 <b>Joriy balans: {current_balance:,.0f} so'm</b>")
