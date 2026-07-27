@@ -6,13 +6,13 @@ import threading
 from datetime import datetime
 import pytz
 from aiogram import Bot, Dispatcher, F, Router, types
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from flask import Flask
 
-# DB faylidan funksiyalarni import qilish (get_connection qo'shildi)
+# DB faylidan funksiyalarni import qilish
 from app.database.db import (
     init_db,
     add_user,
@@ -82,11 +82,13 @@ async def cmd_start(message: types.Message):
 
 @router.message(Command("kirim"))
 async def cmd_kirim(message: types.Message, state: FSMContext):
-    await message.answer("💰 Balansga qo'shmoqchi bo'lgan summani kiriting (masalan: 1 500 000):")
+    await message.answer("💰 Balansga qo'shmoqchi bo'lgan summani kiriting (masalan: 1_500_000 yoki 1 000 000):")
     await state.set_state(FSM.income)
 
-@router.message(F.state == FSM.income, F.text)
+# TO'G'RILANGAN QISM: StateFilter orqali holat aniq tekshiriladi
+@router.message(StateFilter(FSM.income), F.text)
 async def process_income(message: types.Message, state: FSMContext):
+    # Probel va boshqa bo'sh joylarni olib tashlash
     text = re.sub(r'\s+', '', message.text)
 
     if text.isdigit():
@@ -94,10 +96,10 @@ async def process_income(message: types.Message, state: FSMContext):
         user_id = message.from_user.id
         
         add_user(user_id)
+        # Kiritilgan pulni balansga qo'shadi
         update_balance(user_id, amount)
         current_balance = get_balance(user_id)
 
-        # Bekor qilish tugmasi FAQAT kirim uchun qoldi
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🗑 Oxirgi kirimni o'chirish", callback_data=f"undo_inc_{int(amount)}")]
         ])
@@ -106,6 +108,7 @@ async def process_income(message: types.Message, state: FSMContext):
             f"✅ Balansga {amount:,.0f} so'm qo'shildi.\n💳 Joriy balans: {current_balance:,.0f} so'm",
             reply_markup=kb
         )
+        # Holatni tozalab tashlash (keyingi yozilganlar xarajat deb qabul qilinishi uchun)
         await state.clear()
     else:
         await message.answer("❌ Noto'g'ri summa kiritildi. Iltimos, faqat raqam kiriting:")
@@ -113,7 +116,7 @@ async def process_income(message: types.Message, state: FSMContext):
 @router.callback_query(F.data.startswith("undo_inc_"))
 async def undo_income(callback: types.CallbackQuery):
     amount = float(callback.data.split("_")[2])
-    user_id = callback.from_user.id
+    user_id = callback.fromuser.id
 
     update_balance(user_id, -amount)
     current_balance = get_balance(user_id)
@@ -130,7 +133,6 @@ async def undo_income(callback: types.CallbackQuery):
 async def cmd_tozalash(message: types.Message):
     user_id = message.from_user.id
     
-    # Ma'lumotlar bazasiga bevosita ulanib, eng oxirgi xarajatni topamiz
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute('''
@@ -143,7 +145,7 @@ async def cmd_tozalash(message: types.Message):
         exp_id, amount, item_name = row
         # 1. Baza yozuvidan o'chirish
         cursor.execute('DELETE FROM expenses WHERE id = ?', (exp_id,))
-        # 2. Pulni foydalanuvchi balansiga qaytarish
+        # 2. Xarajat qilingan pulni yana foydalanuvchi balansiga qaytarib qo'shish
         cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, user_id))
         conn.commit()
         
@@ -190,7 +192,8 @@ async def cmd_kunlik(message: types.Message):
 
 # ================= 3. XARAJAT QISMI (YANGI FORMATDA) =================
 
-@router.message(F.text)
+# TO'G'RILANGAN QISM: StateFilter(None) orqali faqatgina boshqa holatlarda emasligini ta'minlaymiz
+@router.message(StateFilter(None), F.text)
 async def process_expense(message: types.Message):
     if message.text.startswith('/'):
         return
@@ -228,6 +231,7 @@ async def process_expense(message: types.Message):
 
             item_full_name = f"{name} {qty} {unit}"
             
+            # Xarajat yozilganida, pul sizning balansingizdan ayirib boriladi
             add_expense(
                 user_id=user_id,
                 amount=line_total,
@@ -237,7 +241,6 @@ async def process_expense(message: types.Message):
                 time=time_str
             )
 
-            # Siz so'ragan yangi dizayndagi xarajat formati
             block = (
                 f"📝 Nomi: {item_full_name}\n"
                 f"💰 Summa: {int(line_total):,} so'm\n"
@@ -249,11 +252,9 @@ async def process_expense(message: types.Message):
     if response_blocks:
         current_balance = get_balance(user_id)
         
-        # Bloklarni orasini ochiq qilib birlashtiramiz
         final_text = "\n\n".join(response_blocks)
         final_text += f"\n\n💳 Joriy balans: {current_balance:,.0f} so'm"
 
-        # TUGMA OLIB TASHLANDI: Endi bekor qilish uchun menyudagi /tozalash ishlatiladi
         await message.answer(final_text)
     else:
         await message.answer(
