@@ -98,8 +98,8 @@ async def cmd_start(message: types.Message):
         f"Assalomu alaykum! Xarajatlarni hisoblab boruvchi botga xush kelibsiz. 🚀\n\n"
         f"💳 Joriy balansingiz: {current_balance:,.0f} so'm\n\n"
         f"📥 **Kirim qilish 2 usulda:**\n"
-        f"1️⃣ `/kirim` yoki `/kirim 1500000`\n"
-        f"2️⃣ `+ 1500000` yoki `maosh 1500000`\n\n"
+        f"1️⃣ `/kirim` yoki `/kirim 15 000 000`\n"
+        f"2️⃣ `+ 15 000 000` yoki `maosh 15 000 000`\n\n"
         f"🛒 **Xarajat qilish 2 usulda:**\n"
         f"1️⃣ `non 2 ta 3500`\n"
         f"2️⃣ `sariyog 15000`",
@@ -166,6 +166,11 @@ async def process_income(message: types.Message, state: FSMContext):
 @router.callback_query(F.data.startswith("undo_inc_"))
 async def undo_income(callback: types.CallbackQuery):
     try:
+        # Tugma allaqachon bosilganligini tekshirish (himoya)
+        if not callback.message.reply_markup:
+            await callback.answer("Bu kirim allaqachon bekor qilingan!", show_alert=True)
+            return
+
         parts = callback.data.split("_")
         amount = float(parts[2])
         user_id = callback.fromuser.id
@@ -173,13 +178,14 @@ async def undo_income(callback: types.CallbackQuery):
         update_balance(user_id, -amount)
         current_balance = get_balance(user_id)
 
-        await callback.message.edit_text(
-            f"🗑 {amount:,.0f} so'm kirim bekor qilindi.\n💳 Joriy balans: {current_balance:,.0f} so'm"
-        )
+        original_text = callback.message.text.split("\n")[0]
+        new_text = f"{original_text}\n\n🗑 <b>{amount:,.0f} so'm kirim bekor qilindi.</b>\n💳 Joriy balans: {current_balance:,.0f} so'm"
+
+        await callback.message.edit_text(new_text, parse_mode="HTML", reply_markup=None)
         await callback.answer("Kirim muvaffaqiyatli bekor qilindi!")
     except Exception as e:
         logging.error(f"Undo income error: {e}")
-        await callback.answer("Bu kirim allaqachon bekor qilingan.", show_alert=True)
+        await callback.answer("Xatolik yuz berdi yoki allaqachon bajarilgan.", show_alert=True)
 
 
 # ================= 2. MENYU BUYRUQLARI (TOZALASH VA HISOBOTLAR) =================
@@ -345,11 +351,8 @@ async def process_text_message(message: types.Message):
     add_user(user_id)
     lines = message.text.strip().split('\n')
 
-    # Kirim uchun matnli naqshlar (+ 1500000 yoki maosh 1500000 yoki kirim 1500000)
     pattern_income = re.compile(r"^(\+|kirim|maosh)\s+([\d\s]+)$", re.IGNORECASE)
-    # Xarajat 1: O'lchov birligi bilan (Masalan: non 2 ta 3500)
     pattern_unit = re.compile(r"^(.*?)\s+(\d+(?:\.\d+)?)\s*(ta|kg|l|litr|m|metr)\s+([\d\s]+)$", re.IGNORECASE)
-    # Xarajat 2: Oddiy nom va summa (Masalan: sariyog 15000 yoki eski qarz 35000)
     pattern_simple = re.compile(r"^(.*?)\s+([\d\s]+)$", re.IGNORECASE)
 
     parsed_expenses = []
@@ -446,7 +449,7 @@ async def process_text_message(message: types.Message):
     else:
         await message.answer(
             "⚠️ Xabarni to'g'ri formatda kiriting:\n\n"
-            "📥 Kirim: `+ 1500000` yoki `/kirim 1500000`\n"
+            "📥 Kirim: `+ 15 000 000` yoki `/kirim 15 000 000`\n"
             "🛒 Xarajat: `non 2 ta 3500` yoki `sariyog 15000`",
             parse_mode="HTML"
         )
