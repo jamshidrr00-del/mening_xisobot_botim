@@ -60,9 +60,29 @@ async def set_bot_commands(bot: Bot):
     ]
     await bot.set_my_commands(commands)
 
-# --- STANDART KATEGORIYA YARATISH ---
-def seed_default_category():
-    add_category("Umumiy")
+# --- STANDARD KATEGORIYALARNI BAZAGA QO'SHISH ---
+def seed_default_categories():
+    categories = ["Magazin", "Zapravka", "Apteka", "Stroy magazin", "Boshqa"]
+    conn = get_connection()
+    cursor = conn.cursor()
+    for cat in categories:
+        cursor.execute("INSERT OR IGNORE INTO categories (name) VALUES (?)", (cat,))
+    conn.commit()
+    conn.close()
+
+# --- AVTOMATIK KATEGORIYAGA AJRATISH FUNKSIYASI ---
+def determine_category(name: str) -> str:
+    name_lower = name.lower()
+    if any(w in name_lower for w in ["benzin", "metan", "propan", "zapravka", "ai-92", "ai-95", "gaz"]):
+        return "Zapravka"
+    elif any(w in name_lower for w in ["dori", "tabletka", "apteka", "vitamin", "salfetka", "shpris"]):
+        return "Apteka"
+    elif any(w in name_lower for w in ["sement", "kraska", "mix", "truba", "kafel", "shurup", "bolt", "qum"]):
+        return "Stroy magazin"
+    elif any(w in name_lower for w in ["non", "shakar", "un", "kartoshka", "sariyog", "yog'", "yog", "sut", "choy", "go'sht", "gosht", "tuxum", "guruch", "makaron", "kolbasa", "sir", "tuz", "meva", "sabzi", "piyoz"]):
+        return "Magazin"
+    else:
+        return "Boshqa"
 
 # ================= 1. KIRIM (DAROMAD) QISMI =================
 
@@ -74,21 +94,19 @@ async def cmd_start(message: types.Message):
     await message.answer(
         f"Assalomu alaykum! Xarajatlarni hisoblab boruvchi botga xush kelibsiz. 🚀\n\n"
         f"💳 Joriy balansingiz: {current_balance:,.0f} so'm\n\n"
-        f"Xarajatlarni yozish uchun shunchaki quyidagi formatda yuboring:\n"
-        f"<code>non 4 ta 3000</code>\n"
-        f"<code>shakar 2 kg 10000</code>",
+        f"Xarajatlarni yozish uchun shunchaki quyidagi formatlarda yuboring:\n"
+        f"<code>non 2 ta 3500</code>\n"
+        f"<code>sariyog kchayu kotàsi 15000</code>",
         parse_mode="HTML"
     )
 
 @router.message(Command("kirim"))
 async def cmd_kirim(message: types.Message, state: FSMContext):
-    await message.answer("💰 Balansga qo'shmoqchi bo'lgan summani kiriting (masalan: 1_500_000 yoki 1 000 000):")
+    await message.answer("💰 Balansga qo'shmoqchi bo'lgan summani kiriting (masalan: 1 000 000):")
     await state.set_state(FSM.income)
 
-# TO'G'RILANGAN QISM: StateFilter orqali holat aniq tekshiriladi
 @router.message(StateFilter(FSM.income), F.text)
 async def process_income(message: types.Message, state: FSMContext):
-    # Probel va boshqa bo'sh joylarni olib tashlash
     text = re.sub(r'\s+', '', message.text)
 
     if text.isdigit():
@@ -96,7 +114,6 @@ async def process_income(message: types.Message, state: FSMContext):
         user_id = message.from_user.id
         
         add_user(user_id)
-        # Kiritilgan pulni balansga qo'shadi
         update_balance(user_id, amount)
         current_balance = get_balance(user_id)
 
@@ -108,7 +125,6 @@ async def process_income(message: types.Message, state: FSMContext):
             f"✅ Balansga {amount:,.0f} so'm qo'shildi.\n💳 Joriy balans: {current_balance:,.0f} so'm",
             reply_markup=kb
         )
-        # Holatni tozalab tashlash (keyingi yozilganlar xarajat deb qabul qilinishi uchun)
         await state.clear()
     else:
         await message.answer("❌ Noto'g'ri summa kiritildi. Iltimos, faqat raqam kiriting:")
@@ -127,7 +143,7 @@ async def undo_income(callback: types.CallbackQuery):
     await callback.answer("Kirim o'chirildi")
 
 
-# ================= 2. MENYU BUYRUQLARI (TOZALASH VA KUNLIK) =================
+# ================= 2. MENYU BUYRUQLARI (TOZALASH VA KUNlik) =================
 
 @router.message(Command("tozalash"))
 async def cmd_tozalash(message: types.Message):
@@ -143,9 +159,7 @@ async def cmd_tozalash(message: types.Message):
     
     if row:
         exp_id, amount, item_name = row
-        # 1. Baza yozuvidan o'chirish
         cursor.execute('DELETE FROM expenses WHERE id = ?', (exp_id,))
-        # 2. Xarajat qilingan pulni yana foydalanuvchi balansiga qaytarib qo'shish
         cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, user_id))
         conn.commit()
         
@@ -190,9 +204,8 @@ async def cmd_kunlik(message: types.Message):
     await message.answer("\n".join(report_lines), parse_mode="HTML")
 
 
-# ================= 3. XARAJAT QISMI (YANGI FORMATDA) =================
+# ================= 3. XARAJAT QISMI (MOSlashuvchan va Kategoriyalangan) =================
 
-# TO'G'RILANGAN QISM: StateFilter(None) orqali faqatgina boshqa holatlarda emasligini ta'minlaymiz
 @router.message(StateFilter(None), F.text)
 async def process_expense(message: types.Message):
     if message.text.startswith('/'):
@@ -202,9 +215,12 @@ async def process_expense(message: types.Message):
     add_user(user_id)
     lines = message.text.strip().split('\n')
 
-    pattern = re.compile(r"^(.*?)\s+(\d+(?:\.\d+)?)\s*(ta|kg|l|litr|m|metr)\s+([\d\s]+)$", re.IGNORECASE)
+    # 1-shablon: [Nomi] [Miqdori] [Birlik] [Narxi] (Masalan: non 2 ta 3500)
+    pattern_unit = re.compile(r"^(.*?)\s+(\d+(?:\.\d+)?)\s*(ta|kg|l|litr|m|metr)\s+([\d\s]+)$", re.IGNORECASE)
+    # 2-shablon: [Nomi] [Summasi] (Masalan: sariyog 15000 yoki eski qarz 35000)
+    pattern_simple = re.compile(r"^(.*?)\s+([\d\s]+)$", re.IGNORECASE)
 
-    response_blocks = []
+    parsed_expenses = []
     total_expense = 0
     
     tz = pytz.timezone("Asia/Tashkent")
@@ -212,55 +228,94 @@ async def process_expense(message: types.Message):
     date_str = now.strftime("%Y-%m-%d")
     time_str = now.strftime("%H:%M")
 
-    categories = get_categories()
-    default_cat_id = categories[0][0] if categories else 1
+    # Kategoriyalarni bazadan olib kelish
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name FROM categories")
+    cat_rows = cursor.fetchall()
+    cat_dict = {name.lower(): cat_id for cat_id, name in cat_rows}
+    conn.close()
 
     for line in lines:
-        match = pattern.match(line.strip())
-        if match:
-            name = match.group(1).strip().capitalize()
-            qty_str = match.group(2)
+        line_text = line.strip()
+        if not line_text:
+            continue
+
+        match_unit = pattern_unit.match(line_text)
+        match_simple = pattern_simple.match(line_text)
+
+        name = ""
+        line_total = 0
+        item_full_name = ""
+
+        if match_unit:
+            name = match_unit.group(1).strip().capitalize()
+            qty_str = match_unit.group(2)
             qty = float(qty_str) if '.' in qty_str else int(qty_str)
-            unit = match.group(3).strip().lower()
-
-            price_str = match.group(4)
+            unit = match_unit.group(3).strip().lower()
+            price_str = match_unit.group(4)
             price = float(re.sub(r'\s+', '', price_str))
-
-            line_total = qty * price
-            total_expense += line_total
-
-            item_full_name = f"{name} {qty} {unit}"
             
-            # Xarajat yozilganida, pul sizning balansingizdan ayirib boriladi
-            add_expense(
-                user_id=user_id,
-                amount=line_total,
-                category_id=default_cat_id,
-                item_name=item_full_name,
-                date=date_str,
-                time=time_str
-            )
+            line_total = qty * price
+            item_full_name = f"{name} {qty} {unit}"
+        elif match_simple:
+            name = match_simple.group(1).strip().capitalize()
+            price_str = match_simple.group(2)
+            line_total = float(re.sub(r'\s+', '', price_str))
+            item_full_name = name
+        else:
+            continue
 
-            block = (
-                f"📝 Nomi: {item_full_name}\n"
-                f"💰 Summa: {int(line_total):,} so'm\n"
-                f"🗂 Kategoriya: 🎁 Boshqa\n"
-                f"📅 Vaqt: {date_str} {time_str}"
-            )
-            response_blocks.append(block)
+        # Avtomatik kategoriya aniqlash
+        cat_name = determine_category(name)
+        cat_id = cat_dict.get(cat_name.lower(), 1)
 
-    if response_blocks:
+        # Bazaga yozish
+        add_expense(
+            user_id=user_id,
+            amount=line_total,
+            category_id=cat_id,
+            item_name=item_full_name,
+            date=date_str,
+            time=time_str
+        )
+
+        total_expense += line_total
+        parsed_expenses.append({
+            "category": cat_name,
+            "name": item_full_name,
+            "amount": line_total
+        })
+
+    if parsed_expenses:
         current_balance = get_balance(user_id)
-        
-        final_text = "\n\n".join(response_blocks)
-        final_text += f"\n\n💳 Joriy balans: {current_balance:,.0f} so'm"
 
-        await message.answer(final_text)
+        # Kategoriyalar bo'yicha guruhlash
+        grouped = {}
+        for exp in parsed_expenses:
+            c = exp["category"]
+            if c not in grouped:
+                grouped[c] = []
+            grouped[c].append(exp)
+
+        response_lines = ["🛒 <b>Xarajatlar ro'yxati:</b>\n"]
+        
+        for cat, items in grouped.items():
+            response_lines.append(f"📂 <b>{cat}:</b>")
+            for item in items:
+                response_lines.append(f"  • {item['name']} — {int(item['amount']):,} so'm")
+            response_lines.append("") # bo'sh qator
+
+        response_lines.append(f"💰 <b>Jami summa: {int(total_expense):,} so'm</b>")
+        response_lines.append(f"💳 <b>Joriy balans: {current_balance:,.0f} so'm</b>")
+
+        await message.answer("\n".join(response_lines), parse_mode="HTML")
     else:
         await message.answer(
-            "⚠️ Xarajatni quyidagi formatda yuboring:\n\n"
-            "gril 4 ta 62000\n"
-            "shakar 2 kg 10000"
+            "⚠️ Xarajatni to'g'ri formatda kiriting:\n\n"
+            "1) <code>non 2 ta 3500</code>\n"
+            "2) <code>sariyog 15000</code>",
+            parse_mode="HTML"
         )
 
 
@@ -268,7 +323,7 @@ async def process_expense(message: types.Message):
 
 async def main():
     init_db()
-    seed_default_category()
+    seed_default_categories()
 
     threading.Thread(target=run_flask, daemon=True).start()
 
