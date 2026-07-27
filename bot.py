@@ -50,11 +50,12 @@ router = Router()
 class FSM(StatesGroup):
     income = State()
 
-# --- BOT BUYRUQLAR MENYUSINI SOZLASH (Barchasi qo'shildi) ---
+# --- BOT BUYRUQLAR MENYUSINI SOZLASH ---
 async def set_bot_commands(bot: Bot):
     commands = [
         BotCommand(command="start", description="Botni ishga tushirish 🚀"),
         BotCommand(command="kirim", description="Balansga pul qo'shish 💰"),
+        BotCommand(command="balans", description="Joriy balansni tekshirish 💳"),
         BotCommand(command="tozalash", description="Oxirgi xarajatni o'chirish 🗑"),
         BotCommand(command="kunlik", description="Kunlik hisobot 📊"),
         BotCommand(command="haftalik", description="Haftalik hisobot 📅"),
@@ -72,7 +73,7 @@ def seed_default_categories():
     conn.commit()
     conn.close()
 
-# --- AVTOMATIK KATEGORIYAGA AJRATISH FUNKSIYASI ---
+# --- AVTOMATIK KATEGORIYAGA AJRATISH ---
 def determine_category(name: str) -> str:
     name_lower = name.lower()
     if any(w in name_lower for w in ["benzin", "metan", "propan", "zapravka", "ai-92", "ai-95", "gaz"]):
@@ -86,7 +87,7 @@ def determine_category(name: str) -> str:
     else:
         return "Boshqa"
 
-# ================= 1. KIRIM (DAROMAD) QISMI =================
+# ================= 1. KIRIM VA BALANS QISMI (2 USULDA) =================
 
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
@@ -96,14 +97,45 @@ async def cmd_start(message: types.Message):
     await message.answer(
         f"Assalomu alaykum! Xarajatlarni hisoblab boruvchi botga xush kelibsiz. 🚀\n\n"
         f"💳 Joriy balansingiz: {current_balance:,.0f} so'm\n\n"
-        f"Xarajatlarni yozish uchun shunchaki quyidagi formatlarda yuboring:\n"
-        f"<code>non 2 ta 3500</code>\n"
-        f"<code>sariyog 15000</code>",
+        f"📥 **Kirim qilish 2 usulda:**\n"
+        f"1️⃣ `/kirim` yoki `/kirim 1500000`\n"
+        f"2️⃣ `+ 1500000` yoki `maosh 1500000`\n\n"
+        f"🛒 **Xarajat qilish 2 usulda:**\n"
+        f"1️⃣ `non 2 ta 3500`\n"
+        f"2️⃣ `sariyog 15000`",
         parse_mode="HTML"
     )
 
+@router.message(Command("balans"))
+async def cmd_balans(message: types.Message):
+    user_id = message.from_user.id
+    add_user(user_id)
+    current_balance = get_balance(user_id)
+    await message.answer(f"💳 <b>Joriy balansingiz:</b> {current_balance:,.0f} so'm", parse_mode="HTML")
+
 @router.message(Command("kirim"))
 async def cmd_kirim(message: types.Message, state: FSMContext):
+    args = message.text.split(maxsplit=1)
+    user_id = message.from_user.id
+    add_user(user_id)
+
+    if len(args) > 1:
+        text_clean = re.sub(r'\s+', '', args[1])
+        if text_clean.isdigit():
+            amount = float(text_clean)
+            update_balance(user_id, amount)
+            current_balance = get_balance(user_id)
+
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🗑 Oxirgi kirimni o'chirish", callback_data=f"undo_inc_{int(amount)}")]
+            ])
+
+            await message.answer(
+                f"✅ Balansga {amount:,.0f} so'm qo'shildi.\n💳 Joriy balans: {current_balance:,.0f} so'm",
+                reply_markup=kb
+            )
+            return
+
     await message.answer("💰 Balansga qo'shmoqchi bo'lgan summani kiriting (masalan: 1 000 000):")
     await state.set_state(FSM.income)
 
@@ -134,7 +166,8 @@ async def process_income(message: types.Message, state: FSMContext):
 @router.callback_query(F.data.startswith("undo_inc_"))
 async def undo_income(callback: types.CallbackQuery):
     try:
-        amount = float(callback.data.split("_")[2])
+        parts = callback.data.split("_")
+        amount = float(parts[2])
         user_id = callback.fromuser.id
 
         update_balance(user_id, -amount)
@@ -143,10 +176,10 @@ async def undo_income(callback: types.CallbackQuery):
         await callback.message.edit_text(
             f"🗑 {amount:,.0f} so'm kirim bekor qilindi.\n💳 Joriy balans: {current_balance:,.0f} so'm"
         )
-        await callback.answer("Kirim o'chirildi")
+        await callback.answer("Kirim muvaffaqiyatli bekor qilindi!")
     except Exception as e:
         logging.error(f"Undo income error: {e}")
-        await callback.answer("Xatolik yuz berdi yoki allaqachon bajarilgan.", show_alert=True)
+        await callback.answer("Bu kirim allaqachon bekor qilingan.", show_alert=True)
 
 
 # ================= 2. MENYU BUYRUQLARI (TOZALASH VA HISOBOTLAR) =================
@@ -301,10 +334,10 @@ async def cmd_oylik(message: types.Message):
     await message.answer("\n".join(report_lines), parse_mode="HTML")
 
 
-# ================= 3. XARAJAT QISMI =================
+# ================= 3. KIRIM VA XARAJATLARNI MATNDAN O'QISH (2 USULDA) =================
 
 @router.message(StateFilter(None), F.text)
-async def process_expense(message: types.Message):
+async def process_text_message(message: types.Message):
     if message.text.startswith('/'):
         return
 
@@ -312,11 +345,17 @@ async def process_expense(message: types.Message):
     add_user(user_id)
     lines = message.text.strip().split('\n')
 
+    # Kirim uchun matnli naqshlar (+ 1500000 yoki maosh 1500000 yoki kirim 1500000)
+    pattern_income = re.compile(r"^(\+|kirim|maosh)\s+([\d\s]+)$", re.IGNORECASE)
+    # Xarajat 1: O'lchov birligi bilan (Masalan: non 2 ta 3500)
     pattern_unit = re.compile(r"^(.*?)\s+(\d+(?:\.\d+)?)\s*(ta|kg|l|litr|m|metr)\s+([\d\s]+)$", re.IGNORECASE)
+    # Xarajat 2: Oddiy nom va summa (Masalan: sariyog 15000 yoki eski qarz 35000)
     pattern_simple = re.compile(r"^(.*?)\s+([\d\s]+)$", re.IGNORECASE)
 
     parsed_expenses = []
     total_expense = 0
+    total_income_added = 0
+    income_buttons = None
     
     tz = pytz.timezone("Asia/Tashkent")
     now = datetime.now(tz)
@@ -335,14 +374,19 @@ async def process_expense(message: types.Message):
         if not line_text:
             continue
 
+        match_income = pattern_income.match(line_text)
         match_unit = pattern_unit.match(line_text)
         match_simple = pattern_simple.match(line_text)
 
-        name = ""
-        line_total = 0
-        item_full_name = ""
-
-        if match_unit:
+        if match_income:
+            price_str = match_income.group(2)
+            inc_amount = float(re.sub(r'\s+', '', price_str))
+            update_balance(user_id, inc_amount)
+            total_income_added += inc_amount
+            income_buttons = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🗑 Oxirgi kirimni o'chirish", callback_data=f"undo_inc_{int(inc_amount)}")]
+            ])
+        elif match_unit:
             name = match_unit.group(1).strip().capitalize()
             qty_str = match_unit.group(2)
             qty = float(qty_str) if '.' in qty_str else int(qty_str)
@@ -352,36 +396,34 @@ async def process_expense(message: types.Message):
             
             line_total = qty * price
             item_full_name = f"{name} {qty} {unit}"
+
+            cat_name = determine_category(name)
+            cat_id = cat_dict.get(cat_name.lower(), 1)
+
+            add_expense(user_id=user_id, amount=line_total, category_id=cat_id, item_name=item_full_name, date=date_str, time=time_str)
+            total_expense += line_total
+            parsed_expenses.append({"category": cat_name, "name": item_full_name, "amount": line_total})
+
         elif match_simple:
             name = match_simple.group(1).strip().capitalize()
             price_str = match_simple.group(2)
             line_total = float(re.sub(r'\s+', '', price_str))
             item_full_name = name
-        else:
-            continue
 
-        cat_name = determine_category(name)
-        cat_id = cat_dict.get(cat_name.lower(), 1)
+            cat_name = determine_category(name)
+            cat_id = cat_dict.get(cat_name.lower(), 1)
 
-        add_expense(
-            user_id=user_id,
-            amount=line_total,
-            category_id=cat_id,
-            item_name=item_full_name,
-            date=date_str,
-            time=time_str
-        )
+            add_expense(user_id=user_id, amount=line_total, category_id=cat_id, item_name=item_full_name, date=date_str, time=time_str)
+            total_expense += line_total
+            parsed_expenses.append({"category": cat_name, "name": item_full_name, "amount": line_total})
 
-        total_expense += line_total
-        parsed_expenses.append({
-            "category": cat_name,
-            "name": item_full_name,
-            "amount": line_total
-        })
+    current_balance = get_balance(user_id)
+    response_parts = []
+
+    if total_income_added > 0:
+        response_parts.append(f"✅ Balansga <b>{total_income_added:,.0f} so'm</b> kirim qo'shildi.")
 
     if parsed_expenses:
-        current_balance = get_balance(user_id)
-
         grouped = {}
         for exp in parsed_expenses:
             c = exp["category"]
@@ -389,23 +431,23 @@ async def process_expense(message: types.Message):
                 grouped[c] = []
             grouped[c].append(exp)
 
-        response_lines = ["🛒 <b>Xarajatlar ro'yxati:</b>\n"]
-        
+        response_parts.append("🛒 <b>Xarajatlar ro'yxati:</b>")
         for cat, items in grouped.items():
-            response_lines.append(f"📂 <b>{cat}:</b>")
+            response_parts.append(f"📂 <b>{cat}:</b>")
             for item in items:
-                response_lines.append(f"  • {item['name']} — {int(item['amount']):,} so'm")
-            response_lines.append("")
+                response_parts.append(f"  • {item['name']} — {int(item['amount']):,} so'm")
+            response_parts.append("")
 
-        response_lines.append(f"💰 <b>Jami summa: {int(total_expense):,} so'm</b>")
-        response_lines.append(f"💳 <b>Joriy balans: {current_balance:,.0f} so'm</b>")
+        response_parts.append(f"💰 <b>Jami xarajat: {int(total_expense):,} so'm</b>")
 
-        await message.answer("\n".join(response_lines), parse_mode="HTML")
+    if response_parts:
+        response_parts.append(f"💳 <b>Joriy balans: {current_balance:,.0f} so'm</b>")
+        await message.answer("\n".join(response_parts), parse_mode="HTML", reply_markup=income_buttons)
     else:
         await message.answer(
-            "⚠️ Xarajatni to'g'ri formatda kiriting:\n\n"
-            "1) <code>non 2 ta 3500</code>\n"
-            "2) <code>sariyog 15000</code>",
+            "⚠️ Xabarni to'g'ri formatda kiriting:\n\n"
+            "📥 Kirim: `+ 1500000` yoki `/kirim 1500000`\n"
+            "🛒 Xarajat: `non 2 ta 3500` yoki `sariyog 15000`",
             parse_mode="HTML"
         )
 
