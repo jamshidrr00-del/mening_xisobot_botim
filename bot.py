@@ -9,14 +9,13 @@ from aiogram import Bot, Dispatcher, F, Router, types
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import BotCommand
+from aiogram.types import BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
 from flask import Flask
 
 # DB faylidan funksiyalarni import qilish
 from app.database.db import (
     init_db,
     add_user,
-    get_balance,
     get_connection
 )
 
@@ -44,7 +43,7 @@ dp = Dispatcher()
 router = Router()
 
 class FSM(StatesGroup):
-    income = State()
+    income_amount = State()
 
 # --- BOT BUYRUQLAR MENYUSINI SOZLASH ---
 async def set_bot_commands(bot: Bot):
@@ -52,7 +51,8 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="start", description="Botni ishga tushirish 🚀"),
         BotCommand(command="kirim", description="Balansga pul qo'shish 💰"),
         BotCommand(command="kirim_ochirish", description="Oxirgi kirimni o'chirish ❌"),
-        BotCommand(command="balans", description="Joriy balansni tekshirish 💳"),
+        BotCommand(command="balans", description="Joriy balanslarni tekshirish 💳"),
+        BotCommand(command="balans_tozalash", description="Balansni noldan boshlash 🗑"),
         BotCommand(command="tozalash", description="Oxirgi xarajatni o'chirish 🗑"),
         BotCommand(command="kunlik", description="Kunlik hisobot 📊"),
         BotCommand(command="haftalik", description="Haftalik hisobot 📅"),
@@ -60,7 +60,7 @@ async def set_bot_commands(bot: Bot):
     ]
     await bot.set_my_commands(commands)
 
-# --- STANDARD KATEGORIYALARNI BAZAGA QO'SHISH ---
+# --- STANDARD KATEGORIYALARni BAZAGA QO'SHISH ---
 def seed_default_categories():
     categories = ["Magazin", "Zapravka", "Apteka", "Stroy magazin", "Boshqa"]
     conn = get_connection()
@@ -84,21 +84,30 @@ def determine_category(name: str) -> str:
     else:
         return "Boshqa"
 
-# ================= 1. KIRIM VA BALANS QISMI (2 USULDA) =================
+# ================= 1. KIRIM VA BALANS QISMI =================
 
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
     add_user(user_id)
-    current_balance = get_balance(user_id)
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT card_balance, cash_balance, balance FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    
+    card_bal, cash_bal, total_bal = row if row else (0, 0, 0)
+
     await message.answer(
         f"Assalomu alaykum! Xarajatlarni hisoblab boruvchi botga xush kelibsiz. 🚀\n\n"
-        f"💳 <b>Joriy balansingiz:</b> {current_balance:,.0f} so'm\n\n"
-        f"📥 <b>Kirim qilish 2 usulda:</b>\n"
-        f"1️⃣ <code>/kirim</code> yoki <code>/kirim 15 000 000</code>\n"
-        f"2️⃣ <code>+ 15 000 000</code> yoki <code>maosh 15 000 000</code>\n\n"
-        f"❌ <b>Oxirgi kirimni o'chirish:</b> <code>/kirim_ochirish</code>\n\n"
-        f"🛒 <b>Xarajat qilish 2 usulda:</b>\n"
+        f"💳 <b>Plastik karta:</b> {card_bal:,.0f} so'm\n"
+        f"💵 <b>Naqd pul:</b> {cash_bal:,.0f} so'm\n"
+        f"💰 <b>Jami balans:</b> {total_bal:,.0f} so'm\n\n"
+        f"📥 <b>Kirim qilish uchun:</b> <code>/kirim</code> buyrug'ini bosing\n"
+        f"❌ <b>Oxirgi kirimni o'chirish:</b> <code>/kirim_ochirish</code>\n"
+        f"🗑 <b>Balansni tozalash:</b> <code>/balans_tozalash</code>\n\n"
+        f"🛒 <b>Xarajat qilish:</b>\n"
         f"1️⃣ <code>non 2 ta 3500</code>\n"
         f"2️⃣ <code>sariyog 15000</code>",
         parse_mode="HTML"
@@ -108,56 +117,93 @@ async def cmd_start(message: types.Message):
 async def cmd_balans(message: types.Message):
     user_id = message.from_user.id
     add_user(user_id)
-    current_balance = get_balance(user_id)
-    await message.answer(f"💳 <b>Joriy balansingiz:</b> {current_balance:,.0f} so'm", parse_mode="HTML")
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT card_balance, cash_balance, balance FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    
+    card_bal, cash_bal, total_bal = row if row else (0, 0, 0)
+    
+    await message.answer(
+        f"💳 <b>Balans hisoboti:</b>\n\n"
+        f"💳 Plastik karta: {card_bal:,.0f} so'm\n"
+        f"💵 Naqd pul: {cash_bal:,.0f} so'm\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"💰 <b>Jami balans: {total_bal:,.0f} so'm</b>",
+        parse_mode="HTML"
+    )
 
-@router.message(Command("kirim"))
-async def cmd_kirim(message: types.Message, state: FSMContext):
-    args = message.text.split(maxsplit=1)
+@router.message(Command("balans_tozalash"))
+async def cmd_balans_tozalash(message: types.Message):
     user_id = message.from_user.id
     add_user(user_id)
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET card_balance = 0, cash_balance = 0, balance = 0, last_income = 0, last_income_type = 'cash' WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+    
+    await message.answer("🗑 <b>Barcha balansingiz (Plastik va Naqd) 0 so'm qilib tozalandi!</b>", parse_mode="HTML")
 
-    if len(args) > 1:
-        text_clean = re.sub(r'\s+', '', args[1])
-        if text_clean.isdigit():
-            amount = float(text_clean)
-            
-            conn = get_connection()
-            cursor = conn.cursor()
-            cursor.execute("UPDATE users SET balance = balance + ?, last_income = ? WHERE user_id = ?", (amount, amount, user_id))
-            conn.commit()
-            cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
-            current_balance = cursor.fetchone()[0]
-            conn.close()
+@router.message(Command("kirim"))
+async def cmd_kirim(message: types.Message):
+    user_id = message.from_user.id
+    add_user(user_id)
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="💳 Plastik karta", callback_data="inc_card"),
+            InlineKeyboardButton(text="💵 Naqd pul", callback_data="inc_cash")
+        ]
+    ])
+    await message.answer("📥 Qaysi balansga pul qo'shmoqchisiz? Tanlang:", reply_markup=keyboard)
 
-            await message.answer(
-                f"✅ Balansga {amount:,.0f} so'm qo'shildi.\n💳 Joriy balans: {current_balance:,.0f} so'm",
-                parse_mode="HTML"
-            )
-            return
+@router.callback_query(F.data.in_({"inc_card", "inc_cash"}))
+async def process_income_choice(callback: types.CallbackQuery, state: FSMContext):
+    inc_type = "card" if callback.data == "inc_card" else "cash"
+    type_name = "Plastik karta" if inc_type == "card" else "Naqd pul"
+    
+    await state.update_data(income_type=inc_type)
+    await state.set_state(FSM.income_amount)
+    
+    await callback.message.edit_text(f"💰 <b>{type_name}</b> uchun summani kiriting (masalan: 1000000):", parse_mode="HTML")
+    await callback.answer()
 
-    await message.answer("💰 Balansga qo'shmoqchi bo'lgan summani kiriting (masalan: 1 000 000):")
-    await state.set_state(FSM.income)
-
-@router.message(StateFilter(FSM.income), F.text)
-async def process_income(message: types.Message, state: FSMContext):
+@router.message(StateFilter(FSM.income_amount), F.text)
+async def process_income_amount(message: types.Message, state: FSMContext):
     text = re.sub(r'\s+', '', message.text)
 
     if text.isdigit():
         amount = float(text)
         user_id = message.from_user.id
+        data = await state.get_data()
+        inc_type = data.get("income_type", "cash")
         
         add_user(user_id)
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("UPDATE users SET balance = balance + ?, last_income = ? WHERE user_id = ?", (amount, amount, user_id))
+        
+        if inc_type == "card":
+            cursor.execute("UPDATE users SET card_balance = card_balance + ?, last_income = ?, last_income_type = ? WHERE user_id = ?", (amount, amount, 'card', user_id))
+        else:
+            cursor.execute("UPDATE users SET cash_balance = cash_balance + ?, last_income = ?, last_income_type = ? WHERE user_id = ?", (amount, amount, 'cash', user_id))
+            
+        cursor.execute("UPDATE users SET balance = card_balance + cash_balance WHERE user_id = ?", (user_id,))
         conn.commit()
-        cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
-        current_balance = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT card_balance, cash_balance, balance FROM users WHERE user_id = ?", (user_id,))
+        card_bal, cash_bal, total_bal = cursor.fetchone()
         conn.close()
 
+        type_label = "Plastik karta" if inc_type == "card" else "Naqd pul"
         await message.answer(
-            f"✅ Balansga {amount:,.0f} so'm qo'shildi.\n💳 Joriy balans: {current_balance:,.0f} so'm",
+            f"✅ <b>{type_label}</b>ga {amount:,.0f} so'm qo'shildi.\n\n"
+            f"💳 Plastik: {card_bal:,.0f} so'm\n"
+            f"💵 Naqd: {cash_bal:,.0f} so'm\n"
+            f"💰 Jami balans: {total_bal:,.0f} so'm",
             parse_mode="HTML"
         )
         await state.clear()
@@ -171,25 +217,35 @@ async def cmd_kirim_ochirish(message: types.Message):
     
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT balance, last_income FROM users WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT card_balance, cash_balance, last_income, last_income_type FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     
-    if not row or row[1] <= 0:
+    if not row or row[2] <= 0:
         await message.answer("⚠️ O'chirish uchun oxirgi kirim topilmadi yoki allaqachon bekor qilingan.")
         conn.close()
         return
         
-    balance, last_income = row
-    new_balance = balance - last_income
+    card_bal, cash_bal, last_income, last_income_type = row
     
-    cursor.execute("UPDATE users SET balance = ?, last_income = 0 WHERE user_id = ?", (new_balance, user_id))
+    if last_income_type == 'card':
+        card_bal -= last_income
+    else:
+        cash_bal -= last_income
+        
+    cursor.execute(
+        "UPDATE users SET card_balance = ?, cash_balance = ?, balance = ?, last_income = 0, last_income_type = 'cash' WHERE user_id = ?", 
+        (card_bal, cash_bal, card_bal + cash_bal, user_id)
+    )
     conn.commit()
     conn.close()
     
+    type_label = "Plastik karta" if last_income_type == 'card' else "Naqd pul"
     await message.answer(
-        f"❌ <b>Oxirgi kirim bekor qilindi:</b>\n"
+        f"❌ <b>Oxirgi kirim bekor qilindi ({type_label}):</b>\n"
         f"🔸 {last_income:,.0f} so'm ayrildi.\n\n"
-        f"💳 Joriy balans: {new_balance:,.0f} so'm",
+        f"💳 Plastik: {card_bal:,.0f} so'm\n"
+        f"💵 Naqd: {cash_bal:,.0f} so'm\n"
+        f"💰 Jami balans: {card_bal + cash_bal:,.0f} so'm",
         parse_mode="HTML"
     )
 
@@ -211,14 +267,19 @@ async def cmd_tozalash(message: types.Message):
     if row:
         exp_id, amount, item_name = row
         cursor.execute('DELETE FROM expenses WHERE id = ?', (exp_id,))
-        cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, user_id))
+        # Xarajat o'chirilganda naqd pul balansiga qaytarib beriladi
+        cursor.execute('UPDATE users SET cash_balance = cash_balance + ?, balance = card_balance + cash_balance WHERE user_id = ?', (amount, user_id))
         conn.commit()
         
-        current_balance = get_balance(user_id)
+        cursor.execute("SELECT card_balance, cash_balance, balance FROM users WHERE user_id = ?", (user_id,))
+        card_bal, cash_bal, total_bal = cursor.fetchone()
+        
         await message.answer(
             f"🗑 <b>Oxirgi xarajat bekor qilindi:</b>\n"
             f"🔸 {item_name} — {int(amount):,} so'm\n\n"
-            f"💳 Joriy balans: {current_balance:,.0f} so'm",
+            f"💳 Plastik: {card_bal:,.0f} so'm\n"
+            f"💵 Naqd: {cash_bal:,.0f} so'm\n"
+            f"💰 Jami balans: {total_bal:,.0f} so'm",
             parse_mode="HTML"
         )
     else:
@@ -346,7 +407,7 @@ async def cmd_oylik(message: types.Message):
     await message.answer("\n".join(report_lines), parse_mode="HTML")
 
 
-# ================= 3. KIRIM VA XARAJATLARNI MATNDAN O'QISH (2 USULDA) =================
+# ================= 3. XARAJATLARNI MATNDAN O'QISH =================
 
 @router.message(StateFilter(None), F.text)
 async def process_text_message(message: types.Message):
@@ -357,13 +418,11 @@ async def process_text_message(message: types.Message):
     add_user(user_id)
     lines = message.text.strip().split('\n')
 
-    pattern_income = re.compile(r"^(\+|kirim|maosh)\s+([\d\s]+)$", re.IGNORECASE)
     pattern_unit = re.compile(r"^(.*?)\s+(\d+(?:\.\d+)?)\s*(ta|kg|l|litr|m|metr)\s+([\d\s]+)$", re.IGNORECASE)
     pattern_simple = re.compile(r"^(.*?)\s+([\d\s]+)$", re.IGNORECASE)
 
     parsed_expenses = []
     total_expense = 0
-    total_income_added = 0
     
     tz = pytz.timezone("Asia/Tashkent")
     now = datetime.now(tz)
@@ -382,16 +441,10 @@ async def process_text_message(message: types.Message):
             if not line_text:
                 continue
 
-            match_income = pattern_income.match(line_text)
             match_unit = pattern_unit.match(line_text)
             match_simple = pattern_simple.match(line_text)
 
-            if match_income:
-                price_str = match_income.group(2)
-                inc_amount = float(re.sub(r'\s+', '', price_str))
-                cursor.execute("UPDATE users SET balance = balance + ?, last_income = ? WHERE user_id = ?", (inc_amount, inc_amount, user_id))
-                total_income_added += inc_amount
-            elif match_unit:
+            if match_unit:
                 name = match_unit.group(1).strip().capitalize()
                 qty_str = match_unit.group(2)
                 qty = float(qty_str) if '.' in qty_str else int(qty_str)
@@ -428,9 +481,9 @@ async def process_text_message(message: types.Message):
                 total_expense += line_total
                 parsed_expenses.append({"category": cat_name, "name": item_full_name, "amount": line_total})
 
-        # Agar xarajatlar yozilgan bo'lsa, balansdan xarajat summasini ayirib tashlaymiz
+        # Xarajat qilinganda naqd pul balansidan ayirilib, umumiy balans yangilanadi
         if total_expense > 0:
-            cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (total_expense, user_id))
+            cursor.execute("UPDATE users SET cash_balance = cash_balance - ?, balance = card_balance + cash_balance WHERE user_id = ?", (total_expense, user_id))
 
         conn.commit()
         conn.close()
@@ -440,11 +493,13 @@ async def process_text_message(message: types.Message):
         await message.answer("❌ Xatolik yuz berdi. Iltimos, xabarni to'g'ri formatda yuboring.")
         return
 
-    current_balance = get_balance(user_id)
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT card_balance, cash_balance, balance FROM users WHERE user_id = ?", (user_id,))
+    card_bal, cash_bal, total_bal = cursor.fetchone()
+    conn.close()
+    
     response_parts = []
-
-    if total_income_added > 0:
-        response_parts.append(f"✅ Balansga <b>{total_income_added:,.0f} so'm</b> kirim qo'shildi.")
 
     if parsed_expenses:
         grouped = {}
@@ -464,12 +519,17 @@ async def process_text_message(message: types.Message):
         response_parts.append(f"💰 <b>Jami xarajat: {int(total_expense):,} so'm</b>")
 
     if response_parts:
-        response_parts.append(f"💳 <b>Joriy balans: {current_balance:,.0f} so'm</b>")
+        response_parts.append(
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"💳 Plastik: {card_bal:,.0f} so'm\n"
+            f"💵 Naqd: {cash_bal:,.0f} so'm\n"
+            f"💰 <b>Joriy balans: {total_bal:,.0f} so'm</b>"
+        )
         await message.answer("\n".join(response_parts), parse_mode="HTML")
     else:
         await message.answer(
             "⚠️ Xabarni to'g'ri formatda kiriting:\n\n"
-            "📥 Kirim: <code>+ 15 000 000</code> yoki <code>/kirim 15 000 000</code>\n"
+            "📥 Kirim: <code>/kirim</code>\n"
             "🛒 Xarajat: <code>non 2 ta 3500</code> yoki <code>sariyog 15000</code>",
             parse_mode="HTML"
         )
@@ -484,7 +544,10 @@ async def main():
     conn = get_connection()
     cursor = conn.cursor()
     try:
+        cursor.execute("ALTER TABLE users ADD COLUMN card_balance REAL DEFAULT 0")
+        cursor.execute("ALTER TABLE users ADD COLUMN cash_balance REAL DEFAULT 0")
         cursor.execute("ALTER TABLE users ADD COLUMN last_income REAL DEFAULT 0")
+        cursor.execute("ALTER TABLE users ADD COLUMN last_income_type TEXT DEFAULT 'cash'")
         conn.commit()
     except Exception:
         pass
