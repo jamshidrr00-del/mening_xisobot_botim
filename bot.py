@@ -259,7 +259,6 @@ async def cmd_tozalash(message: types.Message):
     conn = get_connection()
     cursor = conn.cursor()
     
-    # Oldingi versiyadagi tablitsalarda 'payment_type' bo'lmasa xatolik bermasligi uchun try-except qilingan
     try:
         cursor.execute('''
             SELECT id, amount, item_name, payment_type FROM expenses 
@@ -273,16 +272,19 @@ async def cmd_tozalash(message: types.Message):
         ''', (user_id,))
         row = cursor.fetchone()
         if row:
-            row = (*row, 'cash')  # Agar column yo'q bo'lsa default cash deymiz
+            row = (*row, 'cash')
             
     if row:
         exp_id, amount, item_name, pay_type = row
         cursor.execute('DELETE FROM expenses WHERE id = ?', (exp_id,))
         
+        # Bug fix: Ayirishni va total hisoblashni alohida ajratdik
         if pay_type == 'card':
-            cursor.execute('UPDATE users SET card_balance = card_balance + ?, balance = card_balance + cash_balance WHERE user_id = ?', (amount, user_id))
+            cursor.execute('UPDATE users SET card_balance = card_balance + ? WHERE user_id = ?', (amount, user_id))
         else:
-            cursor.execute('UPDATE users SET cash_balance = cash_balance + ?, balance = card_balance + cash_balance WHERE user_id = ?', (amount, user_id))
+            cursor.execute('UPDATE users SET cash_balance = cash_balance + ? WHERE user_id = ?', (amount, user_id))
+            
+        cursor.execute('UPDATE users SET balance = card_balance + cash_balance WHERE user_id = ?', (user_id,))
         conn.commit()
         
         cursor.execute("SELECT card_balance, cash_balance, balance FROM users WHERE user_id = ?", (user_id,))
@@ -575,11 +577,13 @@ async def process_expense_choice(callback: types.CallbackQuery, state: FSMContex
             (user_id, exp['amount'], exp['cat_id'], exp['name'], exp['date_str'], exp['time_str'], pay_type)
         )
         
+    # Bug fix: Ayirishni va total hisoblashni alohida ajratdik
     if pay_type == "card":
-        cursor.execute("UPDATE users SET card_balance = card_balance - ?, balance = card_balance + cash_balance WHERE user_id = ?", (total_expense, user_id))
+        cursor.execute("UPDATE users SET card_balance = card_balance - ? WHERE user_id = ?", (total_expense, user_id))
     else:
-        cursor.execute("UPDATE users SET cash_balance = cash_balance - ?, balance = card_balance + cash_balance WHERE user_id = ?", (total_expense, user_id))
+        cursor.execute("UPDATE users SET cash_balance = cash_balance - ? WHERE user_id = ?", (total_expense, user_id))
         
+    cursor.execute("UPDATE users SET balance = card_balance + cash_balance WHERE user_id = ?", (user_id,))
     conn.commit()
     
     cursor.execute("SELECT card_balance, cash_balance, balance FROM users WHERE user_id = ?", (user_id,))
@@ -623,7 +627,7 @@ async def main():
 
     conn = get_connection()
     cursor = conn.cursor()
-    # Databazaga yetishmaydigan columnlarni qo'shish (Xatolik bersa o'tkazib yuboradi, chunki ular allaqachon bo'lishi mumkin)
+    
     try: cursor.execute("ALTER TABLE users ADD COLUMN card_balance REAL DEFAULT 0")
     except Exception: pass
     
