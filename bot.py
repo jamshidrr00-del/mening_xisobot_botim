@@ -44,6 +44,7 @@ router = Router()
 
 class FSM(StatesGroup):
     income_amount = State()
+    expense_choice = State()  # Xarajatni qayerdan ayirishni tanlash uchun yangi holat
 
 # --- BOT BUYRUQLAR MENYUSINI SOZLASH ---
 async def set_bot_commands(bot: Bot):
@@ -249,7 +250,6 @@ async def cmd_kirim_ochirish(message: types.Message):
         parse_mode="HTML"
     )
 
-
 # ================= 2. MENYU BUYRUQLARI (TOZALASH VA HISOBOTLAR) =================
 
 @router.message(Command("tozalash"))
@@ -258,25 +258,41 @@ async def cmd_tozalash(message: types.Message):
     
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute('''
-        SELECT id, amount, item_name FROM expenses 
-        WHERE user_id = ? ORDER BY id DESC LIMIT 1
-    ''', (user_id,))
-    row = cursor.fetchone()
     
+    # Oldingi versiyadagi tablitsalarda 'payment_type' bo'lmasa xatolik bermasligi uchun try-except qilingan
+    try:
+        cursor.execute('''
+            SELECT id, amount, item_name, payment_type FROM expenses 
+            WHERE user_id = ? ORDER BY id DESC LIMIT 1
+        ''', (user_id,))
+        row = cursor.fetchone()
+    except Exception:
+        cursor.execute('''
+            SELECT id, amount, item_name FROM expenses 
+            WHERE user_id = ? ORDER BY id DESC LIMIT 1
+        ''', (user_id,))
+        row = cursor.fetchone()
+        if row:
+            row = (*row, 'cash')  # Agar column yo'q bo'lsa default cash deymiz
+            
     if row:
-        exp_id, amount, item_name = row
+        exp_id, amount, item_name, pay_type = row
         cursor.execute('DELETE FROM expenses WHERE id = ?', (exp_id,))
-        # Xarajat o'chirilganda naqd pul balansiga qaytarib beriladi
-        cursor.execute('UPDATE users SET cash_balance = cash_balance + ?, balance = card_balance + cash_balance WHERE user_id = ?', (amount, user_id))
+        
+        if pay_type == 'card':
+            cursor.execute('UPDATE users SET card_balance = card_balance + ?, balance = card_balance + cash_balance WHERE user_id = ?', (amount, user_id))
+        else:
+            cursor.execute('UPDATE users SET cash_balance = cash_balance + ?, balance = card_balance + cash_balance WHERE user_id = ?', (amount, user_id))
         conn.commit()
         
         cursor.execute("SELECT card_balance, cash_balance, balance FROM users WHERE user_id = ?", (user_id,))
         card_bal, cash_bal, total_bal = cursor.fetchone()
         
+        pay_label = "💳 Plastik" if pay_type == 'card' else "💵 Naqd"
         await message.answer(
             f"🗑 <b>Oxirgi xarajat bekor qilindi:</b>\n"
-            f"🔸 {item_name} — {int(amount):,} so'm\n\n"
+            f"🔸 {item_name} — {int(amount):,} so'm\n"
+            f"🔄 Summa <b>{pay_label}</b> hisobiga qaytarildi.\n\n"
             f"💳 Plastik: {card_bal:,.0f} so'm\n"
             f"💵 Naqd: {cash_bal:,.0f} so'm\n"
             f"💰 Jami balans: {total_bal:,.0f} so'm",
@@ -407,10 +423,10 @@ async def cmd_oylik(message: types.Message):
     await message.answer("\n".join(report_lines), parse_mode="HTML")
 
 
-# ================= 3. XARAJATLARNI MATNDAN O'QISH =================
+# ================= 3. XARAJATLARNI MATNDAN O'QISH VA TANLOV =================
 
 @router.message(StateFilter(None), F.text)
-async def process_text_message(message: types.Message):
+async def process_text_message(message: types.Message, state: FSMContext):
     if message.text.startswith('/'):
         return
 
@@ -434,6 +450,7 @@ async def process_text_message(message: types.Message):
         cursor = conn.cursor()
         cursor.execute("SELECT id, name FROM categories")
         cat_rows = cursor.fetchall()
+        conn.close()
         cat_dict = {name.lower(): cat_id for cat_id, name in cat_rows}
 
         for line in lines:
@@ -458,12 +475,15 @@ async def process_text_message(message: types.Message):
                 cat_name = determine_category(name)
                 cat_id = cat_dict.get(cat_name.lower(), 1)
 
-                cursor.execute(
-                    "INSERT INTO expenses (user_id, amount, category_id, item_name, date, time) VALUES (?, ?, ?, ?, ?, ?)",
-                    (user_id, line_total, cat_id, item_full_name, date_str, time_str)
-                )
+                parsed_expenses.append({
+                    "category": cat_name, 
+                    "cat_id": cat_id, 
+                    "name": item_full_name, 
+                    "amount": line_total,
+                    "date_str": date_str,
+                    "time_str": time_str
+                })
                 total_expense += line_total
-                parsed_expenses.append({"category": cat_name, "name": item_full_name, "amount": line_total})
 
             elif match_simple:
                 name = match_simple.group(1).strip().capitalize()
@@ -474,65 +494,125 @@ async def process_text_message(message: types.Message):
                 cat_name = determine_category(name)
                 cat_id = cat_dict.get(cat_name.lower(), 1)
 
-                cursor.execute(
-                    "INSERT INTO expenses (user_id, amount, category_id, item_name, date, time) VALUES (?, ?, ?, ?, ?, ?)",
-                    (user_id, line_total, cat_id, item_full_name, date_str, time_str)
-                )
+                parsed_expenses.append({
+                    "category": cat_name, 
+                    "cat_id": cat_id, 
+                    "name": item_full_name, 
+                    "amount": line_total,
+                    "date_str": date_str,
+                    "time_str": time_str
+                })
                 total_expense += line_total
-                parsed_expenses.append({"category": cat_name, "name": item_full_name, "amount": line_total})
-
-        # Xarajat qilinganda naqd pul balansidan ayirilib, umumiy balans yangilanadi
-        if total_expense > 0:
-            cursor.execute("UPDATE users SET cash_balance = cash_balance - ?, balance = card_balance + cash_balance WHERE user_id = ?", (total_expense, user_id))
-
-        conn.commit()
-        conn.close()
 
     except Exception as e:
         logging.error(f"Process text error: {e}", exc_info=True)
         await message.answer("❌ Xatolik yuz berdi. Iltimos, xabarni to'g'ri formatda yuboring.")
         return
 
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT card_balance, cash_balance, balance FROM users WHERE user_id = ?", (user_id,))
-    card_bal, cash_bal, total_bal = cursor.fetchone()
-    conn.close()
-    
-    response_parts = []
-
-    if parsed_expenses:
-        grouped = {}
-        for exp in parsed_expenses:
-            c = exp["category"]
-            if c not in grouped:
-                grouped[c] = []
-            grouped[c].append(exp)
-
-        response_parts.append("🛒 <b>Xarajatlar ro'yxati:</b>")
-        for cat, items in grouped.items():
-            response_parts.append(f"📂 <b>{cat}:</b>")
-            for item in items:
-                response_parts.append(f"  • {item['name']} — {int(item['amount']):,} so'm")
-            response_parts.append("")
-
-        response_parts.append(f"💰 <b>Jami xarajat: {int(total_expense):,} so'm</b>")
-
-    if response_parts:
-        response_parts.append(
-            f"━━━━━━━━━━━━━━━━━━━\n"
-            f"💳 Plastik: {card_bal:,.0f} so'm\n"
-            f"💵 Naqd: {cash_bal:,.0f} so'm\n"
-            f"💰 <b>Joriy balans: {total_bal:,.0f} so'm</b>"
-        )
-        await message.answer("\n".join(response_parts), parse_mode="HTML")
-    else:
+    if not parsed_expenses:
         await message.answer(
             "⚠️ Xabarni to'g'ri formatda kiriting:\n\n"
-            "📥 Kirim: <code>/kirim</code>\n"
             "🛒 Xarajat: <code>non 2 ta 3500</code> yoki <code>sariyog 15000</code>",
             parse_mode="HTML"
         )
+        return
+
+    # FSM State'ga xarajatlarni saqlaymiz va tanlov tugmalarini chiqaramiz
+    await state.update_data(pending_expenses=parsed_expenses, total_expense=total_expense)
+    await state.set_state(FSM.expense_choice)
+
+    grouped = {}
+    for exp in parsed_expenses:
+        c = exp["category"]
+        if c not in grouped:
+            grouped[c] = []
+        grouped[c].append(exp)
+
+    preview_text = "🛒 <b>Xarajatlar ro'yxati:</b>\n"
+    for cat, items in grouped.items():
+        preview_text += f"📂 <b>{cat}:</b>\n"
+        for item in items:
+            preview_text += f"  • {item['name']} — {int(item['amount']):,} so'm\n"
+        preview_text += "\n"
+
+    preview_text += f"💰 <b>Jami xarajat: {int(total_expense):,} so'm</b>\n\n👇 <b>Ushbu xarajatni qaysi hisobdan ayiramiz?</b>"
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="💳 Plastik karta", callback_data="exp_card"),
+            InlineKeyboardButton(text="💵 Naqd pul", callback_data="exp_cash")
+        ],
+        [
+            InlineKeyboardButton(text="❌ Bekor qilish", callback_data="exp_cancel")
+        ]
+    ])
+
+    await message.answer(preview_text, parse_mode="HTML", reply_markup=keyboard)
+
+
+# ================= 4. XARAJATNI TASDIQLASH (CALLBACK) =================
+
+@router.callback_query(StateFilter(FSM.expense_choice), F.data.in_({"exp_card", "exp_cash", "exp_cancel"}))
+async def process_expense_choice(callback: types.CallbackQuery, state: FSMContext):
+    if callback.data == "exp_cancel":
+        await callback.message.edit_text("❌ <b>Xarajat yozish bekor qilindi.</b>", parse_mode="HTML")
+        await state.clear()
+        return
+        
+    data = await state.get_data()
+    pending_expenses = data.get("pending_expenses", [])
+    total_expense = data.get("total_expense", 0)
+    user_id = callback.from_user.id
+    
+    pay_type = "card" if callback.data == "exp_card" else "cash"
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    for exp in pending_expenses:
+        cursor.execute(
+            "INSERT INTO expenses (user_id, amount, category_id, item_name, date, time, payment_type) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (user_id, exp['amount'], exp['cat_id'], exp['name'], exp['date_str'], exp['time_str'], pay_type)
+        )
+        
+    if pay_type == "card":
+        cursor.execute("UPDATE users SET card_balance = card_balance - ?, balance = card_balance + cash_balance WHERE user_id = ?", (total_expense, user_id))
+    else:
+        cursor.execute("UPDATE users SET cash_balance = cash_balance - ?, balance = card_balance + cash_balance WHERE user_id = ?", (total_expense, user_id))
+        
+    conn.commit()
+    
+    cursor.execute("SELECT card_balance, cash_balance, balance FROM users WHERE user_id = ?", (user_id,))
+    card_bal, cash_bal, total_bal = cursor.fetchone()
+    conn.close()
+
+    # Tasdiqlangan xabar matni
+    grouped = {}
+    for exp in pending_expenses:
+        c = exp["category"]
+        if c not in grouped:
+            grouped[c] = []
+        grouped[c].append(exp)
+
+    response_parts = ["✅ <b>Xarajatlar muvaffaqiyatli saqlandi:</b>\n"]
+    for cat, items in grouped.items():
+        response_parts.append(f"📂 <b>{cat}:</b>")
+        for item in items:
+            response_parts.append(f"  • {item['name']} — {int(item['amount']):,} so'm")
+        response_parts.append("")
+        
+    pay_label = "💳 Plastik karta" if pay_type == "card" else "💵 Naqd pul"
+    response_parts.append(f"💰 <b>Jami: {int(total_expense):,} so'm</b> ({pay_label}dan ayrildi)")
+    
+    response_parts.append(
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"💳 Plastik: {card_bal:,.0f} so'm\n"
+        f"💵 Naqd: {cash_bal:,.0f} so'm\n"
+        f"💰 <b>Joriy balans: {total_bal:,.0f} so'm</b>"
+    )
+    
+    await callback.message.edit_text("\n".join(response_parts), parse_mode="HTML")
+    await state.clear()
 
 
 # ================= ASOSIY ISHGA TUSHIRISH =================
@@ -543,14 +623,23 @@ async def main():
 
     conn = get_connection()
     cursor = conn.cursor()
-    try:
-        cursor.execute("ALTER TABLE users ADD COLUMN card_balance REAL DEFAULT 0")
-        cursor.execute("ALTER TABLE users ADD COLUMN cash_balance REAL DEFAULT 0")
-        cursor.execute("ALTER TABLE users ADD COLUMN last_income REAL DEFAULT 0")
-        cursor.execute("ALTER TABLE users ADD COLUMN last_income_type TEXT DEFAULT 'cash'")
-        conn.commit()
-    except Exception:
-        pass
+    # Databazaga yetishmaydigan columnlarni qo'shish (Xatolik bersa o'tkazib yuboradi, chunki ular allaqachon bo'lishi mumkin)
+    try: cursor.execute("ALTER TABLE users ADD COLUMN card_balance REAL DEFAULT 0")
+    except Exception: pass
+    
+    try: cursor.execute("ALTER TABLE users ADD COLUMN cash_balance REAL DEFAULT 0")
+    except Exception: pass
+    
+    try: cursor.execute("ALTER TABLE users ADD COLUMN last_income REAL DEFAULT 0")
+    except Exception: pass
+    
+    try: cursor.execute("ALTER TABLE users ADD COLUMN last_income_type TEXT DEFAULT 'cash'")
+    except Exception: pass
+
+    try: cursor.execute("ALTER TABLE expenses ADD COLUMN payment_type TEXT DEFAULT 'cash'")
+    except Exception: pass
+
+    conn.commit()
     conn.close()
 
     threading.Thread(target=run_flask, daemon=True).start()
