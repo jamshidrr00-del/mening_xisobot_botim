@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Expense Tracker</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        :root {
+            --bg-color: var(--tg-theme-bg-color, #f4f4f9);
+            --text-color: var(--tg-theme-text-color, #222);
+            --btn-color: var(--tg-theme-button-color, #2481cc);
+            --btn-text-color: var(--tg-theme-button-text-color, #ffffff);
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 16px;
+            box-sizing: border-box;
+        }
+        h2 { text-align: center; margin-bottom: 20px; }
+        .form-group { margin-bottom: 15px; }
+        label { font-weight: bold; display: block; margin-bottom: 5px; }
+        input, select {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ccc;
+            border-radius: 10px;
+            box-sizing: border-box;
+            font-size: 16px;
+        }
+        .category-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .cat-card {
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            padding: 10px;
+            text-align: center;
+            cursor: pointer;
+            background: #fff;
+            transition: 0.2s;
+        }
+        .cat-card.active {
+            border-color: var(--btn-color);
+            background-color: #eef6ff;
+        }
+        .cat-card span { display: block; font-size: 20px; }
+        .cat-card p { margin: 5px 0 0 0; font-size: 12px; }
+        .submit-btn {
+            width: 100%;
+            background-color: var(--btn-color);
+            color: var(--btn-text-color);
+            border: none;
+            padding: 15px;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <h2>➕ Xarajat Qo‘shish</h2>
+
+    <div class="form-group">
+        <label>Kategoriya tanlang:</label>
+        <div class="category-grid">
+            <div class="cat-card active" onclick="selectCategory(this, '🍞 Oziq-ovqat')">
+                <span>🍞</span><p>Oziq-ovqat</p>
+            </div>
+            <div class="cat-card" onclick="selectCategory(this, '🚕 Transport')">
+                <span>🚕</span><p>Transport</p>
+            </div>
+            <div class="cat-card" onclick="selectCategory(this, '🏠 Uy')">
+                <span>🏠</span><p>Uy</p>
+            </div>
+            <div class="cat-card" onclick="selectCategory(this, '💊 Sog‘liq')">
+                <span>💊</span><p>Sog‘liq</p>
+            </div>
+            <div class="cat-card" onclick="selectCategory(this, '🎮 Ko‘ngilochar')">
+                <span>🎮</span><p>Ko‘ngilochar</p>
+            </div>
+            <div class="cat-card" onclick="selectCategory(this, '🛍 Boshqa')">
+                <span>🛍</span><p>Boshqa</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="form-group">
+        <label for="item">Mahsulot yoki xizmat nomi:</label>
+        <input type="text" id="item" placeholder="Masalan: Non yoki Taksi">
+    </div>
+
+    <div class="form-group">
+        <label for="amount">Summa:</label>
+        <input type="number" id="amount" placeholder="Masalan: 14000">
+    </div>
+
+    <div class="form-group">
+        <label for="currency">Valyuta:</label>
+        <select id="currency">
+            <option value="UZS">UZS (so'm)</option>
+            <option value="USD">USD ($)</option>
+            <option value="EUR">EUR (€)</option>
+            <option value="RUB">RUB (₽)</option>
+        </select>
+    </div>
+
+    <button class="submit-btn" onclick="saveExpense()">Saqlash</button>
+
+    <script>
+        let tg = window.Telegram.WebApp;
+        tg.expand(); // Oynani to'liq ekranga yoyish
+
+        let selectedCategory = '🍞 Oziq-ovqat';
+
+        function selectCategory(element, category) {
+            document.querySelectorAll('.cat-card').forEach(el => el.classList.remove('active'));
+            element.classList.add('active');
+            selectedCategory = category;
+        }
+
+        function saveExpense() {
+            let item = document.getElementById('item').value;
+            let amount = document.getElementById('amount').value;
+            let currency = document.getElementById('currency').value;
+
+            if (!item || !amount) {
+                alert("Iltimos, mahsulot nomi va summani kiriting!");
+                return;
+            }
+
+            // Botga JSON formatda ma'lumot yuboramiz
+            let data = {
+                category: selectedCategory,
+                item_name: item,
+                amount: parseFloat(amount),
+                currency: currency
+            };
+
+            tg.sendData(JSON.stringify(data)); // Ma'lumotni botga yuborib darchani yopadi
+        }
+    </script>
+</body>
+</html>
