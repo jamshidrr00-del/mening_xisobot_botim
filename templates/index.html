@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mening Hisobotim</title>
+    <!-- Telegram Web App skriptini ulash -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        /* Vaqtinchalik oddiy dizayn */
+        body {
+            font-family: Arial, sans-serif;
+            background-color: var(--tg-theme-bg-color, #ffffff);
+            color: var(--tg-theme-text-color, #000000);
+            padding: 20px;
+            text-align: center;
+        }
+        button {
+            background-color: var(--tg-theme-button-color, #3390ec);
+            color: var(--tg-theme-button-text-color, #ffffff);
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Salom, <span id="username">Foydalanuvchi</span>!</h1>
+    <p>Sizning balansingiz: <b>1,500,000 so'm</b></p>
+
+    <button id="closeBtn">Yopish</button>
+
+    <script>
+        // Telegram Web App API'ni ishga tushirish
+        let tg = window.Telegram.WebApp;
+        tg.expand(); // Ilovani butun ekranga yoyish
+
+        // Foydalanuvchi ismini ko'rsatish
+        if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
+            document.getElementById("username").innerText = tg.initDataUnsafe.user.first_name;
+        }
+
+        // Yopish tugmasi
+        document.getElementById("closeBtn").addEventListener("click", function() {
+            tg.close();
+        });
+    </script>
+</body>
+</html>
