@@ -2,13 +2,17 @@ import asyncio
 import logging
 import os
 import re
+import io
 from datetime import datetime, timedelta
 import pytz
 from aiogram import Bot, Dispatcher, F, Router, types
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import BotCommand, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
+
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # DB faylidan funksiyalarni import qilish
 from app.database.db import (
@@ -31,7 +35,7 @@ router = Router()
 
 class FSM(StatesGroup):
     income_amount = State()
-    expense_choice = State()  # Xarajatni qayerdan ayirishni tanlash uchun yangi holat
+    expense_choice = State()
 
 # --- BOT BUYRUQLAR MENYUSINI SOZLASH ---
 async def set_bot_commands(bot: Bot):
@@ -44,7 +48,8 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="tozalash", description="Oxirgi xarajatni o'chirish 🗑"),
         BotCommand(command="kunlik", description="Kunlik hisobot 📊"),
         BotCommand(command="haftalik", description="Haftalik hisobot 📅"),
-        BotCommand(command="oylik", description="Oylik hisobot 📈")
+        BotCommand(command="oylik", description="Oylik hisobot 📈"),
+        BotCommand(command="excel", description="Xarajatlarni Excel formatda yuklab olish 📊")
     ]
     await bot.set_my_commands(commands)
 
@@ -94,7 +99,8 @@ async def cmd_start(message: types.Message):
         f"💰 <b>Jami balans:</b> {total_bal:,.0f} so'm\n\n"
         f"📥 <b>Kirim qilish uchun:</b> <code>/kirim</code> buyrug'ini bosing\n"
         f"❌ <b>Oxirgi kirimni o'chirish:</b> <code>/kirim_ochirish</code>\n"
-        f"🗑 <b>Balansni tozalash:</b> <code>/balans_tozalash</code>\n\n"
+        f"🗑 <b>Balansni tozalash:</b> <code>/balans_tozalash</code>\n"
+        f"📊 <b>Excel hisobot:</b> <code>/excel</code>\n\n"
         f"🛒 <b>Xarajat qilish:</b>\n"
         f"1️⃣ <code>non 2 ta 3500</code>\n"
         f"2️⃣ <code>sariyog 15000</code>",
@@ -237,7 +243,7 @@ async def cmd_kirim_ochirish(message: types.Message):
         parse_mode="HTML"
     )
 
-# ================= 2. MENYU BUYRUQLARI (TOZALASH VA HISOBOTLAR) =================
+# ================= 2. MENYU BUYRUQLARI VA EXCEL =================
 
 @router.message(Command("tozalash"))
 async def cmd_tozalash(message: types.Message):
@@ -410,6 +416,81 @@ async def cmd_oylik(message: types.Message):
     report_lines.append(f"💰 <b>Jami oylik xarajat: {int(total):,} so'm</b>")
     await message.answer("\n".join(report_lines), parse_mode="HTML")
 
+@router.message(Command("excel"))
+async def cmd_excel_report(message: types.Message):
+    user_id = message.from_user.id
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT c.name, e.item_name, e.amount, e.date, e.time, e.payment_type 
+        FROM expenses e
+        JOIN categories c ON e.category_id = c.id
+        WHERE e.user_id = ?
+        ORDER BY e.date DESC, e.time DESC
+    ''', (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    
+    if not rows:
+        await message.answer("⚠️ Excel hisobot yaratish uchun xarajatlar tarixi topilmadi.")
+        return
+        
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Xarajatlar tarixi"
+    
+    headers = ["Kategoriya", "Nomi / Tavsif", "Summa (so'm)", "To'lov turi", "Sana", "Vaqt"]
+    ws.append(headers)
+    
+    header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
+    align_center = Alignment(horizontal="center", vertical="center")
+    align_right = Alignment(horizontal="right", vertical="center")
+    
+    for col_num in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=col_num)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = align_center
+        
+    for row_data in rows:
+        cat_name, item_name, amount, date_val, time_val, pay_type = row_data
+        pay_label = "Plastik" if pay_type == "card" else "Naqd"
+        ws.append([cat_name, item_name, amount, pay_label, date_val, time_val])
+        
+    thin_border = Border(
+        left=Side(style='thin', color='D9D9D9'),
+        right=Side(style='thin', color='D9D9D9'),
+        top=Side(style='thin', color='D9D9D9'),
+        bottom=Side(style='thin', color='D9D9D9')
+    )
+    
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=6):
+        for cell in row:
+            cell.border = thin_border
+            if cell.column == 3:
+                cell.number_format = '#,##0'
+                cell.alignment = align_right
+            else:
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+                
+    for col in ws.columns:
+        max_len = max(len(str(cell.value or '')) for cell in col)
+        col_letter = openpyxl.utils.get_column_letter(col[0].column)
+        ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
+        
+    file_stream = io.BytesIO()
+    wb.save(file_stream)
+    file_stream.seek(0)
+    
+    document = BufferedInputFile(file_stream.getvalue(), filename="xarajatlar_hisoboti.xlsx")
+    
+    await message.answer_document(
+        document=document,
+        caption="📊 Mana sizning barcha xarajatlaringiz jamlangan **Excel hisobot** faylingiz!",
+        parse_mode="Markdown"
+    )
 
 # ================= 3. XARAJATLARNI MATNDAN O'QISH VA TANLOV =================
 
@@ -536,7 +617,6 @@ async def process_text_message(message: types.Message, state: FSMContext):
 
     await message.answer(preview_text, parse_mode="HTML", reply_markup=keyboard)
 
-
 # ================= 4. XARAJATNI TASDIQLASH (CALLBACK) =================
 
 @router.callback_query(StateFilter(FSM.expense_choice), F.data.in_({"exp_card", "exp_cash", "exp_cancel"}))
@@ -600,7 +680,6 @@ async def process_expense_choice(callback: types.CallbackQuery, state: FSMContex
     
     await callback.message.edit_text("\n".join(response_parts), parse_mode="HTML")
     await state.clear()
-
 
 # ================= ASOSIY ISHGA TUSHIRISH =================
 
