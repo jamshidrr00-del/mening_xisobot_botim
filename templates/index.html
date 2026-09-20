@@ -1,52 +1,148 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="uz">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mening Hisobotim</title>
-    <!-- Telegram Web App skriptini ulash -->
+    <title>Hisobot va Ishchilar Boshqaruvi</title>
+    <!-- Telegram Web App SDK -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        /* Vaqtinchalik oddiy dizayn */
-        body {
-            font-family: Arial, sans-serif;
-            background-color: var(--tg-theme-bg-color, #ffffff);
-            color: var(--tg-theme-text-color, #000000);
-            padding: 20px;
-            text-align: center;
+        :root {
+            --bg-color: var(--tg-theme-bg-color, #f4f6f9);
+            --text-color: var(--tg-theme-text-color, #222);
+            --card-bg: var(--tg-theme-secondary-bg-color, #fff);
+            --button-color: var(--tg-theme-button-color, #2481cc);
+            --button-text: var(--tg-theme-button-text-color, #fff);
         }
-        button {
-            background-color: var(--tg-theme-button-color, #3390ec);
-            color: var(--tg-theme-button-text-color, #ffffff);
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 15px;
+        }
+        .container {
+            max-width: 500px;
+            margin: 0 auto;
+        }
+        h2 {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .card {
+            background-color: var(--card-bg);
+            padding: 15px;
+            border-radius: 12px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+        .card h3 {
+            margin-top: 0;
+            font-size: 16px;
+            color: var(--button-color);
+        }
+        .form-group {
+            margin-bottom: 12px;
+        }
+        label {
+            display: block;
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+        input, select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            box-sizing: border-box;
+            font-size: 14px;
+            background: var(--card-bg);
+            color: var(--text-color);
+        }
+        .btn {
+            background-color: var(--button-color);
+            color: var(--button-text);
             border: none;
-            padding: 10px 20px;
+            width: 100%;
+            padding: 12px;
             border-radius: 8px;
             font-size: 16px;
+            font-weight: bold;
             cursor: pointer;
-            margin-top: 20px;
+            margin-top: 5px;
+        }
+        .btn:active {
+            opacity: 0.8;
+        }
+        .summary-box {
+            display: flex;
+            justify-content: space-between;
+            text-align: center;
+        }
+        .summary-item {
+            flex: 1;
+            padding: 10px;
+        }
+        .summary-item span {
+            font-size: 18px;
+            font-weight: bold;
+            display: block;
+            margin-top: 5px;
         }
     </style>
 </head>
 <body>
-    <h1>Salom, <span id="username">Foydalanuvchi</span>!</h1>
-    <p>Sizning balansingiz: <b>1,500,000 so'm</b></p>
 
-    <button id="closeBtn">Yopish</button>
+<div class="container">
+    <h2>📊 Toyxona Hisobot Paneli</h2>
 
-    <script>
-        // Telegram Web App API'ni ishga tushirish
-        let tg = window.Telegram.WebApp;
-        tg.expand(); // Ilovani butun ekranga yoyish
+    <!-- Umumiy balans kartasi -->
+    <div class="card summary-box">
+        <div class="summary-item">
+            <small>Kirim / Balans</small>
+            <span style="color: #28a745;">0 so'm</span>
+        </div>
+        <div class="summary-item">
+            <small>Jami Xarajat</small>
+            <span style="color: #dc3545;">0 so'm</span>
+        </div>
+    </div>
 
-        // Foydalanuvchi ismini ko'rsatish
-        if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
-            document.getElementById("username").innerText = tg.initDataUnsafe.user.first_name;
-        }
+    <!-- Ma'lumot qo'shish formasi -->
+    <div class="card">
+        <h3>➕ Yangi yozuv qo'shish</h3>
+        <form action="/add" method="POST">
+            <div class="form-group">
+                <label>Amal turi:</label>
+                <select name="type">
+                    <option value="expense">📉 Xarajat / To'lov</option>
+                    <option value="income">📈 Kirim</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Summa (so'm):</label>
+                <input type="number" name="amount" placeholder="Masalan: 1500000" required>
+            </div>
+            <div class="form-group">
+                <label>Izoh / Ishchi ismi / Kategoriya:</label>
+                <input type="text" name="description" placeholder="Masalan: Oshpaz maoshi yoki Bozor" required>
+            </div>
+            <button type="submit" class="btn">Saqlash</button>
+        </form>
+    </div>
 
-        // Yopish tugmasi
-        document.getElementById("closeBtn").addEventListener("click", function() {
-            tg.close();
-        });
-    </script>
+    <!-- Oxirgi yozuvlar ro'yxati -->
+    <div class="card">
+        <h3>📋 So'nggi amallar</h3>
+        <p style="text-align: center; color: #888; font-size: 14px;">Hozircha ma'lumotlar yo'q</p>
+    </div>
+</div>
+
+<script>
+    // Telegram Web App init
+    window.Telegram.WebApp.ready();
+    window.Telegram.WebApp.expand();
+</script>
+
 </body>
 </html>
