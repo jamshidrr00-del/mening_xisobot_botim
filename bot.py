@@ -14,6 +14,13 @@ from aiogram.types import BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFFont
+
 # DB faylidan funksiyalarni import qilish
 from app.database.db import (
     init_db,
@@ -49,7 +56,8 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="kunlik", description="Kunlik hisobot 📊"),
         BotCommand(command="haftalik", description="Haftalik hisobot 📅"),
         BotCommand(command="oylik", description="Oylik hisobot 📈"),
-        BotCommand(command="excel", description="Xarajatlarni Excel formatda yuklab olish 📊")
+        BotCommand(command="excel", description="Xarajatlarni Excel formatda yuklab olish 📊"),
+        BotCommand(command="pdf", description="Xarajatlarni PDF formatda yuklab olish 📄")
     ]
     await bot.set_my_commands(commands)
 
@@ -100,7 +108,8 @@ async def cmd_start(message: types.Message):
         f"📥 <b>Kirim qilish uchun:</b> <code>/kirim</code> buyrug'ini bosing\n"
         f"❌ <b>Oxirgi kirimni o'chirish:</b> <code>/kirim_ochirish</code>\n"
         f"🗑 <b>Balansni tozalash:</b> <code>/balans_tozalash</code>\n"
-        f"📊 <b>Excel hisobot:</b> <code>/excel</code>\n\n"
+        f"📊 <b>Excel hisobot:</b> <code>/excel</code>\n"
+        f"📄 <b>PDF hisobot:</b> <code>/pdf</code>\n\n"
         f"🛒 <b>Xarajat qilish:</b>\n"
         f"1️⃣ <code>non 2 ta 3500</code>\n"
         f"2️⃣ <code>sariyog 15000</code>",
@@ -243,7 +252,7 @@ async def cmd_kirim_ochirish(message: types.Message):
         parse_mode="HTML"
     )
 
-# ================= 2. MENYU BUYRUQLARI VA EXCEL =================
+# ================= 2. MENYU BUYRUQLARI, EXCEL VA PDF =================
 
 @router.message(Command("tozalash"))
 async def cmd_tozalash(message: types.Message):
@@ -489,6 +498,122 @@ async def cmd_excel_report(message: types.Message):
     await message.answer_document(
         document=document,
         caption="📊 Mana sizning barcha xarajatlaringiz jamlangan **Excel hisobot** faylingiz!",
+        parse_mode="Markdown"
+    )
+
+@router.message(Command("pdf"))
+async def cmd_pdf_report(message: types.Message):
+    user_id = message.from_user.id
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT c.name, e.item_name, e.amount, e.date, e.time, e.payment_type 
+        FROM expenses e
+        JOIN categories c ON e.category_id = c.id
+        WHERE e.user_id = ?
+        ORDER BY e.date DESC, e.time DESC
+    ''', (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    
+    if not rows:
+        await message.answer("⚠️ PDF hisobot yaratish uchun xarajatlar tarixi topilmadi.")
+        return
+        
+    file_stream = io.BytesIO()
+    doc = SimpleDocTemplate(file_stream, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    story = []
+    
+    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    if os.path.exists(font_path):
+        pdfmetrics.registerFont(TTFFont('DejaVu', font_path))
+        font_name = 'DejaVu'
+    else:
+        font_name = 'Helvetica'
+        
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'TitleStyle',
+        parent=styles['Heading1'],
+        fontName=font_name,
+        fontSize=16,
+        alignment=1,
+        spaceAfter=20
+    )
+    
+    cell_style = ParagraphStyle(
+        'CellStyle',
+        parent=styles['Normal'],
+        fontName=font_name,
+        fontSize=10
+    )
+    
+    header_style = ParagraphStyle(
+        'HeaderStyle',
+        parent=styles['Normal'],
+        fontName=font_name,
+        fontSize=10,
+        textColor=colors.whitesmoke,
+        alignment=1
+    )
+
+    story.append(Paragraph("<b>Xarajatlar tarixi (Hisobot)</b>", title_style))
+    story.append(Spacer(1, 10))
+    
+    table_data = [[
+        Paragraph("<b>Kategoriya</b>", header_style),
+        Paragraph("<b>Nomi</b>", header_style),
+        Paragraph("<b>Summa</b>", header_style),
+        Paragraph("<b>To'lov</b>", header_style),
+        Paragraph("<b>Sana / Vaqt</b>", header_style)
+    ]]
+    
+    total_sum = 0
+    for row_data in rows:
+        cat_name, item_name, amount, date_val, time_val, pay_type = row_data
+        pay_label = "Plastik" if pay_type == "card" else "Naqd"
+        total_sum += amount
+        
+        table_data.append([
+            Paragraph(str(cat_name), cell_style),
+            Paragraph(str(item_name), cell_style),
+            Paragraph(f"{int(amount):,} so'm", cell_style),
+            Paragraph(pay_label, cell_style),
+            Paragraph(f"{date_val} {time_val}", cell_style)
+        ])
+        
+    t = Table(table_data, colWidths=[100, 140, 90, 70, 100])
+    t.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#4F81BD")),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+        ('TOPPADDING', (0, 0), (-1, 0), 8),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#D9D9D9")),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F9F9F9")]),
+    ]))
+    
+    story.append(t)
+    story.append(Spacer(1, 15))
+    
+    summary_style = ParagraphStyle(
+        'SummaryStyle',
+        parent=styles['Normal'],
+        fontName=font_name,
+        fontSize=12,
+        alignment=2
+    )
+    story.append(Paragraph(f"<b>Jami xarajat: {int(total_sum):,} so'm</b>", summary_style))
+    
+    doc.build(story)
+    file_stream.seek(0)
+    
+    document = BufferedInputFile(file_stream.getvalue(), filename="xarajatlar_hisoboti.pdf")
+    
+    await message.answer_document(
+        document=document,
+        caption="📄 Mana sizning barcha xarajatlaringiz jamlangan **PDF hisobot** faylingiz!",
         parse_mode="Markdown"
     )
 
