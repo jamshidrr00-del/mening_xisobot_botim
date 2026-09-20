@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 import re
-import threading
 from datetime import datetime, timedelta
 import pytz
 from aiogram import Bot, Dispatcher, F, Router, types
@@ -10,7 +9,6 @@ from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
-from flask import Flask
 
 # DB faylidan funksiyalarni import qilish
 from app.database.db import (
@@ -22,18 +20,7 @@ from app.database.db import (
 # Logging sozlamasi
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-# --- 1. FLASK SERVER (Render 24/7 ishlashi uchun) ---
-app = Flask(__name__)
-
-@app.route('/')
-def index():
-    return "Expense Tracker Bot is running 24/7! 🚀"
-
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
-
-# --- 2. BOT SOZLAMALARI ---
+# --- BOT SOZLAMALARI ---
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     raise ValueError("BOT_TOKEN topilmadi! Render Environment'ga qo'shing.")
@@ -278,7 +265,6 @@ async def cmd_tozalash(message: types.Message):
         exp_id, amount, item_name, pay_type = row
         cursor.execute('DELETE FROM expenses WHERE id = ?', (exp_id,))
         
-        # Bug fix: Ayirishni va total hisoblashni alohida ajratdik
         if pay_type == 'card':
             cursor.execute('UPDATE users SET card_balance = card_balance + ? WHERE user_id = ?', (amount, user_id))
         else:
@@ -519,7 +505,6 @@ async def process_text_message(message: types.Message, state: FSMContext):
         )
         return
 
-    # FSM State'ga xarajatlarni saqlaymiz va tanlov tugmalarini chiqaramiz
     await state.update_data(pending_expenses=parsed_expenses, total_expense=total_expense)
     await state.set_state(FSM.expense_choice)
 
@@ -577,7 +562,6 @@ async def process_expense_choice(callback: types.CallbackQuery, state: FSMContex
             (user_id, exp['amount'], exp['cat_id'], exp['name'], exp['date_str'], exp['time_str'], pay_type)
         )
         
-    # Bug fix: Ayirishni va total hisoblashni alohida ajratdik
     if pay_type == "card":
         cursor.execute("UPDATE users SET card_balance = card_balance - ? WHERE user_id = ?", (total_expense, user_id))
     else:
@@ -590,7 +574,6 @@ async def process_expense_choice(callback: types.CallbackQuery, state: FSMContex
     card_bal, cash_bal, total_bal = cursor.fetchone()
     conn.close()
 
-    # Tasdiqlangan xabar matni
     grouped = {}
     for exp in pending_expenses:
         c = exp["category"]
@@ -645,8 +628,6 @@ async def main():
 
     conn.commit()
     conn.close()
-
-    threading.Thread(target=run_flask, daemon=True).start()
 
     dp.include_router(router)
     await bot.delete_webhook(drop_pending_updates=True)
