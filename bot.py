@@ -19,7 +19,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFFont
+from reportlab.pdfbase.ttfonts import TTFont
 
 # DB faylidan funksiyalarni import qilish
 from app.database.db import (
@@ -527,7 +527,7 @@ async def cmd_pdf_report(message: types.Message):
     
     font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
     if os.path.exists(font_path):
-        pdfmetrics.registerFont(TTFFont('DejaVu', font_path))
+        pdfmetrics.registerFont(TTFont('DejaVu', font_path))
         font_name = 'DejaVu'
     else:
         font_name = 'Helvetica'
