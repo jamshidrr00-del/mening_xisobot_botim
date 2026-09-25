@@ -177,6 +177,12 @@ async def process_income_choice(callback: types.CallbackQuery, state: FSMContext
 
 @router.message(StateFilter(FSM.income_amount), F.text)
 async def process_income_amount(message: types.Message, state: FSMContext):
+    # Foydalanuvchi kiritgan raqamli xabarni avtomatik o'chiramiz
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
     text = re.sub(r'\s+', '', message.text)
 
     if text.isdigit():
@@ -624,6 +630,12 @@ async def process_text_message(message: types.Message, state: FSMContext):
     if message.text.startswith('/'):
         return
 
+    # Foydalanuvchi yozgan matnni avtomatik o'chirib tashlaymiz
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
     user_id = message.from_user.id
     add_user(user_id)
     lines = message.text.strip().split('\n')
@@ -793,7 +805,7 @@ async def process_expense_choice(callback: types.CallbackQuery, state: FSMContex
             response_parts.append(f"  • {item['name']} — {int(item['amount']):,} so'm")
         response_parts.append("")
         
-    pay_label = "💳 Plastik karta" if pay_type == "card" else "💵 Naqd pul"
+    pay_label = "💳 Plastik" if pay_type == "card" else "💵 Naqd"
     response_parts.append(f"💰 <b>Jami: {int(total_expense):,} so'm</b> ({pay_label}dan ayrildi)")
     
     response_parts.append(
