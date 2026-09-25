@@ -1,13 +1,16 @@
-from flask import Flask, render_template, request, redirect, url_for
-import sqlite3
 import os
+import sqlite3
+from flask import Flask, render_template, request, redirect, url_for
 
 app = Flask(__name__)
-DB_NAME = 'database.db'
+
+# Baza faylining aniq yo'li (Render va localda bir xil ishlashi uchun)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, 'database.db')
 
 def get_db_connection():
-    # timeout=10 parametri bot va web bir vaqtda baza bilan ishlaganda 'database locked' xatosini oldini oladi
-    conn = sqlite3.connect(DB_NAME, timeout=10)
+    # timeout=10 parametri bot va web bir vaqtda baza bilan ishlaganda to'qnashuvni oldini oladi
+    conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -25,7 +28,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Dastur ishga tushganda baza jadvalini tekshirish
+# Dastur ishga tushganda baza jadvalini tekshirish/yaratish
 init_db()
 
 @app.route('/')
@@ -55,7 +58,7 @@ def add_transaction():
             conn.commit()
             conn.close()
         except ValueError:
-            pass  # Raqam emas matn kiritilsa xatolik bermasligi uchun
+            pass  # Agar qiymat xato kiritilsa dastur to'xtab qolmasligi uchun
         
     return redirect(url_for('index'))
 
