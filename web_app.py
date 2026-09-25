@@ -3,10 +3,16 @@ import sqlite3
 import os
 
 app = Flask(__name__)
+DB_NAME = 'database.db'
 
-# Bazaga ulanish funksiyasi (botingiz ishlatadigan bazaga moslab nomini o'zgartirishingiz mumkin)
+def get_db_connection():
+    # timeout=10 parametri bot va web bir vaqtda baza bilan ishlaganda 'database locked' xatosini oldini oladi
+    conn = sqlite3.connect(DB_NAME, timeout=10)
+    conn.row_factory = sqlite3.Row
+    return conn
+
 def init_db():
-    conn = sqlite3.connect('database.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS transactions (
@@ -19,12 +25,12 @@ def init_db():
     conn.commit()
     conn.close()
 
+# Dastur ishga tushganda baza jadvalini tekshirish
 init_db()
 
 @app.route('/')
-index():
-    # Bazadan oxirgi yozuvlarni o'qib chiqish
-    conn = sqlite3.connect('database.db')
+def index():
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT type, amount, description FROM transactions ORDER BY id DESC LIMIT 10")
     rows = cursor.fetchall()
@@ -39,12 +45,17 @@ def add_transaction():
     description = request.form.get('description')
     
     if amount and description:
-        conn = sqlite3.connect('database.db')
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO transactions (type, amount, description) VALUES (?, ?, ?)", 
-                       (trans_type, float(amount), description))
-        conn.commit()
-        conn.close()
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO transactions (type, amount, description) VALUES (?, ?, ?)", 
+                (trans_type, float(amount), description)
+            )
+            conn.commit()
+            conn.close()
+        except ValueError:
+            pass  # Raqam emas matn kiritilsa xatolik bermasligi uchun
         
     return redirect(url_for('index'))
 
