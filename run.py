@@ -57,7 +57,19 @@ def run_flask():
 # ==================== AIOGRAM BOT QISMI ====================
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
-    await message.answer("Assalomu alaykum! To'yxona hisobot botiga xush kelibsiz.")
+    await message.answer("Assalomu alaykum! Xarajatlarni hisoblab boruvchi botga xush kelibsiz. 🚀
+
+💳 Plastik karta: 0 so'm
+💵 Naqd pul: 0 so'm
+💰 Jami balans: 0 so'm
+
+📥 Kirim qilish uchun: /kirim buyrug'ini bosing
+❌ Oxirgi kirimni o'chirish: /kirim_ochirish
+🗑 Balansni tozalash: /balans_tozalash
+
+🛒 Xarajat qilish:
+1️⃣ non 2 ta 3500
+2️⃣ sariyog 1500 .")
 
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
