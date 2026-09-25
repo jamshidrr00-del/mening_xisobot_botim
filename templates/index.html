@@ -3,146 +3,133 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hisobot va Ishchilar Boshqaruvi</title>
-    <!-- Telegram Web App SDK -->
+    <title>Kunlik Xisobot Paneli</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         :root {
-            --bg-color: var(--tg-theme-bg-color, #f4f6f9);
-            --text-color: var(--tg-theme-text-color, #222);
-            --card-bg: var(--tg-theme-secondary-bg-color, #fff);
-            --button-color: var(--tg-theme-button-color, #2481cc);
-            --button-text: var(--tg-theme-button-text-color, #fff);
+            --bg-color: #17212b;
+            --card-bg: #242f3d;
+            --input-bg: #0e1621;
+            --text-color: #ffffff;
+            --text-muted: #7f91a4;
+            --accent-blue: #5288c1;
+            --accent-green: #4cd964;
+            --accent-red: #ff3b30;
+            --border-color: #2b394a;
         }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             background-color: var(--bg-color);
             color: var(--text-color);
             margin: 0;
             padding: 15px;
         }
-        .container {
-            max-width: 500px;
-            margin: 0 auto;
-        }
         h2 {
-            text-align: center;
-            margin-bottom: 20px;
+            margin-top: 0;
+            font-size: 20px;
+            margin-bottom: 15px;
         }
-        .card {
-            background-color: var(--card-bg);
+        .form-card {
+            background: var(--card-bg);
             padding: 15px;
             border-radius: 12px;
-            margin-bottom: 15px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-        }
-        .card h3 {
-            margin-top: 0;
-            font-size: 16px;
-            color: var(--button-color);
+            margin-bottom: 20px;
         }
         .form-group {
             margin-bottom: 12px;
         }
         label {
             display: block;
-            font-size: 14px;
-            margin-bottom: 5px;
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-bottom: 6px;
         }
         input, select {
             width: 100%;
-            padding: 10px;
-            border: 1px solid #ccc;
+            padding: 12px;
+            background: var(--input-bg);
+            border: 1px solid var(--border-color);
             border-radius: 8px;
-            box-sizing: border-box;
+            color: #fff;
             font-size: 14px;
-            background: var(--card-bg);
-            color: var(--text-color);
+            box-sizing: border-box;
+            outline: none;
         }
-        .btn {
-            background-color: var(--button-color);
-            color: var(--button-text);
-            border: none;
+        button.btn-submit {
             width: 100%;
             padding: 12px;
+            background: var(--accent-blue);
+            color: white;
+            border: none;
             border-radius: 8px;
-            font-size: 16px;
             font-weight: bold;
+            font-size: 15px;
             cursor: pointer;
             margin-top: 5px;
         }
-        .btn:active {
-            opacity: 0.8;
+        .table-card {
+            background: var(--card-bg);
+            padding: 15px;
+            border-radius: 12px;
         }
-        .summary-box {
+        .transaction-item {
             display: flex;
             justify-content: space-between;
-            text-align: center;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border-color);
         }
-        .summary-item {
-            flex: 1;
-            padding: 10px;
+        .transaction-item:last-child {
+            border-bottom: none;
         }
-        .summary-item span {
-            font-size: 18px;
-            font-weight: bold;
-            display: block;
-            margin-top: 5px;
-        }
+        .green { color: var(--accent-green); }
+        .red { color: var(--accent-red); }
     </style>
 </head>
 <body>
 
-<div class="container">
-    <h2>📊 Toyxona Hisobot Paneli</h2>
+    <h2>📊 Kunlik Xisobot Paneli</h2>
 
-    <!-- Umumiy balans kartasi -->
-    <div class="card summary-box">
-        <div class="summary-item">
-            <small>Kirim / Balans</small>
-            <span style="color: #28a745;">0 so'm</span>
-        </div>
-        <div class="summary-item">
-            <small>Jami Xarajat</small>
-            <span style="color: #dc3545;">0 so'm</span>
-        </div>
-    </div>
-
-    <!-- Ma'lumot qo'shish formasi -->
-    <div class="card">
-        <h3>➕ Yangi yozuv qo'shish</h3>
+    <div class="form-card">
+        <h3 style="margin-top:0; font-size: 15px;">➕ Yangi yozuv qo'shish</h3>
         <form action="/add" method="POST">
             <div class="form-group">
                 <label>Amal turi:</label>
                 <select name="type">
-                    <option value="expense">📉 Xarajat / To'lov</option>
-                    <option value="income">📈 Kirim</option>
+                    <option value="chiqim">📉 Xarajat / To'lov</option>
+                    <option value="kirim">📈 Kirim / Tushum</option>
                 </select>
             </div>
             <div class="form-group">
                 <label>Summa (so'm):</label>
-                <input type="number" name="amount" placeholder="Masalan: 1500000" required>
+                <input type="number" name="amount" placeholder="Masalan: 50000" required>
             </div>
             <div class="form-group">
-                <label>Izoh / Ishchi ismi / Kategoriya:</label>
-                <input type="text" name="description" placeholder="Masalan: Oshpaz maoshi yoki Bozor" required>
+                <label>Izoh / Kategoriya:</label>
+                <input type="text" name="description" placeholder="Masalan: Bozor, Yoqilg'i, Tushlik" required>
             </div>
-            <button type="submit" class="btn">Saqlash</button>
+            <button type="submit" class="btn-submit">Saqlash</button>
         </form>
     </div>
 
-    <!-- Oxirgi yozuvlar ro'yxati -->
-    <div class="card">
-        <h3>📋 So'nggi amallar</h3>
-        <p style="text-align: center; color: #888; font-size: 14px;">Hozircha ma'lumotlar yo'q</p>
+    <div class="table-card">
+        <h3 style="margin-top:0; font-size: 15px;">📋 So'nggi amallar</h3>
+        {% if transactions %}
+            {% for row in transactions %}
+                <div class="transaction-item">
+                    <div>
+                        <strong>{{ row['description'] }}</strong>
+                        <div style="font-size: 11px; color: var(--text-muted);">{{ row['type']|capitalize }}</div>
+                    </div>
+                    <div class="{{ 'green' if row['type'] == 'kirim' else 'red' }}" style="font-weight: bold;">
+                        {{ '+' if row['type'] == 'kirim' else '-' }}{{ "{:,.0f}".format(row['amount']) }} so'm
+                    </div>
+                </div>
+            {% endfor %}
+        {% else %}
+            <p style="color: var(--text-muted); font-size: 13px; margin: 0;">Hozircha amallar yo'q.</p>
+        {% endif %}
     </div>
-</div>
-
-<script>
-    // Telegram Web App init
-    window.Telegram.WebApp.ready();
-    window.Telegram.WebApp.expand();
-</script>
 
 </body>
 </html>
