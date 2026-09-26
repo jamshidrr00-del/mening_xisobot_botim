@@ -6,6 +6,11 @@ import io
 from datetime import datetime, timedelta
 import pytz
 
+# Diagramma uchun kutubxonalar
+import matplotlib
+matplotlib.use('Agg')  # Serverda ishlashi uchun GUI'ni o'chiradi
+import matplotlib.pyplot as plt
+
 from aiogram import Bot, Dispatcher, F, Router, types, BaseMiddleware
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
@@ -14,9 +19,10 @@ from aiogram.types import BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.drawing.image import Image as ExcelImage
 
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from reportlab.pdfbase import pdfmetrics
@@ -62,13 +68,12 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="kirim", description="Balansga pul qo'shish 💰"),
         BotCommand(command="kirim_ochirish", description="Oxirgi kirimni o'chirish ❌"),
         BotCommand(command="balans", description="Joriy balanslarni tekshirish 💳"),
-        BotCommand(command="balans_tozalash", description="Balansni noldan boshlash 🗑"),
+        BotCommand(command="balans_tozalash", description="Balansni tozalash 🗑"),
         BotCommand(command="tozalash", description="Oxirgi xarajatni o'chirish 🗑"),
         BotCommand(command="kunlik", description="Kunlik hisobot 📊"),
         BotCommand(command="haftalik", description="Haftalik hisobot 📅"),
-        BotCommand(command="oylik", description="Oylik hisobot 📈"),
-        BotCommand(command="excel", description="Xarajatlarni Excel formatda yuklab olish 📊"),
-        BotCommand(command="pdf", description="Xarajatlarni PDF formatda yuklab olish 📄")
+        BotCommand(command="oylik", description="Oylik hisobot (PDF/Excel) 📈"),
+        BotCommand(command="umumiy_xisobot", description="Umumiy hisobot va diagramma 📊")
     ]
     await bot.set_my_commands(commands)
 
@@ -116,12 +121,11 @@ async def cmd_start(message: types.Message):
         f"💳 <b>Plastik karta:</b> {card_bal:,.0f} so'm\n"
         f"💵 <b>Naqd pul:</b> {cash_bal:,.0f} so'm\n"
         f"💰 <b>Jami balans:</b> {total_bal:,.0f} so'm\n\n"
-        f"📥 <b>Kirim qilish uchun:</b> <code>/kirim</code> buyrug'ini bosing\n"
+        f"📥 <b>Kirim qilish uchun:</b> <code>/kirim</code>\n"
         f"❌ <b>Oxirgi kirimni o'chirish:</b> <code>/kirim_ochirish</code>\n"
-        f"🗑 <b>Balansni tozalash:</b> <code>/balans_tozalash</code>\n"
-        f"📊 <b>Excel hisobot:</b> <code>/excel</code>\n"
-        f"📄 <b>PDF hisobot:</b> <code>/pdf</code>\n\n"
-        f"🛒 <b>Xarajat qilish:</b>\n"
+        f"📈 <b>Oylik hisobot:</b> <code>/oylik</code>\n"
+        f"📊 <b>Umumiy hisobot va diagramma:</b> <code>/umumiy_xisobot</code>\n\n"
+        f"🛒 <b>Xarajat qilish formati:</b>\n"
         f"1️⃣ <code>non 2 ta 3500</code>\n"
         f"2️⃣ <code>sariyog 15000</code>",
         parse_mode="HTML"
@@ -263,12 +267,11 @@ async def cmd_kirim_ochirish(message: types.Message):
         parse_mode="HTML"
     )
 
-# ================= 2. MENYU BUYRUQLARI, EXCEL VA PDF =================
+# ================= 2. XARAJATLAR HISOBOTI VA DIAGRAMMALAR =================
 
 @router.message(Command("tozalash"))
 async def cmd_tozalash(message: types.Message):
     user_id = message.from_user.id
-    
     conn = get_connection()
     cursor = conn.cursor()
     
@@ -396,237 +399,238 @@ async def cmd_haftalik(message: types.Message):
     report_lines.append(f"💰 <b>Jami haftalik xarajat: {int(total):,} so'm</b>")
     await message.answer("\n".join(report_lines), parse_mode="HTML")
 
+
+# ---------------- OYLIK VA UMUMIY HISOBOT TUGMALARI ----------------
+
 @router.message(Command("oylik"))
 async def cmd_oylik(message: types.Message):
-    user_id = message.from_user.id
-    tz = pytz.timezone("Asia/Tashkent")
-    now = datetime.now(tz)
-    current_year_month = now.strftime("%Y-%m")
-    
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT c.name, e.item_name, e.amount, e.date 
-        FROM expenses e
-        JOIN categories c ON e.category_id = c.id
-        WHERE e.user_id = ? AND e.date LIKE ?
-        ORDER BY e.date DESC
-    ''', (user_id, f"{current_year_month}%"))
-    rows = cursor.fetchall()
-    conn.close()
-    
-    if not rows:
-        await message.answer(f"📈 <b>Oylik hisobot ({current_year_month})</b>\n\nXarajatlar mavjud emas. 🤷‍♂️", parse_mode="HTML")
-        return
-        
-    total = sum(row[2] for row in rows)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📄 PDF format", callback_data="report_oylik_pdf"),
+            InlineKeyboardButton(text="📊 Excel format", callback_data="report_oylik_excel")
+        ]
+    ])
+    await message.answer("📈 <b>Oylik hisobotni qaysi formatda olmoqchisiz?</b>", parse_mode="HTML", reply_markup=keyboard)
+
+@router.message(Command("umumiy_xisobot"))
+async def cmd_umumiy_xisobot(message: types.Message):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📄 PDF format", callback_data="report_umumiy_pdf"),
+            InlineKeyboardButton(text="📊 Excel format", callback_data="report_umumiy_excel")
+        ]
+    ])
+    await message.answer("📊 <b>Umumiy hisobotni qaysi formatda olmoqchisiz?</b>\n<i>(Ushbu hisobotga diagrammalar ham qo'shiladi)</i>", parse_mode="HTML", reply_markup=keyboard)
+
+
+# ---------------- PDF/EXCEL VA DIAGRAMMA YASASH CALLBACKI ----------------
+
+def generate_pie_chart(rows):
     grouped = {}
-    for cat_name, item_name, amount, date in rows:
-        if cat_name not in grouped:
-            grouped[cat_name] = []
-        grouped[cat_name].append((item_name, amount, date))
-    
-    report_lines = [f"📈 <b>Oylik xarajatlar ({current_year_month}):</b>\n"]
-    for cat, items in grouped.items():
-        report_lines.append(f"📂 <b>{cat}:</b>")
-        for item_name, amount, date in items:
-            report_lines.append(f"  • {item_name} — {int(amount):,} so'm ({date})")
-        report_lines.append("")
-        
-    report_lines.append(f"💰 <b>Jami oylik xarajat: {int(total):,} so'm</b>")
-    await message.answer("\n".join(report_lines), parse_mode="HTML")
+    for row in rows:
+        cat_name = row[0]
+        amount = row[2]
+        grouped[cat_name] = grouped.get(cat_name, 0) + amount
 
-@router.message(Command("excel"))
-async def cmd_excel_report(message: types.Message):
-    user_id = message.from_user.id
+    labels = list(grouped.keys())
+    sizes = list(grouped.values())
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=140, colors=plt.cm.tab20.colors)
+    ax.set_title("Kategoriyalar bo'yicha xarajatlar")
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight')
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+@router.callback_query(F.data.startswith("report_"))
+async def process_report_selection(callback: types.CallbackQuery):
+    action = callback.data
+    user_id = callback.from_user.id
+    
+    parts = action.split("_")
+    period = parts[1] # oylik yoki umumiy
+    file_type = parts[2] # pdf yoki excel
     
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute('''
-        SELECT c.name, e.item_name, e.amount, e.date, e.time, e.payment_type 
-        FROM expenses e
-        JOIN categories c ON e.category_id = c.id
-        WHERE e.user_id = ?
-        ORDER BY e.date DESC, e.time DESC
-    ''', (user_id,))
-    rows = cursor.fetchall()
-    conn.close()
     
-    if not rows:
-        await message.answer("⚠️ Excel hisobot yaratish uchun xarajatlar tarixi topilmadi.")
-        return
-        
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Xarajatlar tarixi"
-    
-    headers = ["Kategoriya", "Nomi / Tavsif", "Summa (so'm)", "To'lov turi", "Sana", "Vaqt"]
-    ws.append(headers)
-    
-    header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-    header_fill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
-    align_center = Alignment(horizontal="center", vertical="center")
-    align_right = Alignment(horizontal="right", vertical="center")
-    
-    for col_num in range(1, len(headers) + 1):
-        cell = ws.cell(row=1, column=col_num)
-        cell.font = header_font
-        cell.fill = header_fill
-        cell.alignment = align_center
-        
-    for row_data in rows:
-        cat_name, item_name, amount, date_val, time_val, pay_type = row_data
-        pay_label = "Plastik" if pay_type == "card" else "Naqd"
-        ws.append([cat_name, item_name, amount, pay_label, date_val, time_val])
-        
-    thin_border = Border(
-        left=Side(style='thin', color='D9D9D9'),
-        right=Side(style='thin', color='D9D9D9'),
-        top=Side(style='thin', color='D9D9D9'),
-        bottom=Side(style='thin', color='D9D9D9')
-    )
-    
-    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=6):
-        for cell in row:
-            cell.border = thin_border
-            if cell.column == 3:
-                cell.number_format = '#,##0'
-                cell.alignment = align_right
-            else:
-                cell.alignment = Alignment(horizontal="left", vertical="center")
-                
-    for col in ws.columns:
-        max_len = max(len(str(cell.value or '')) for cell in col)
-        col_letter = openpyxl.utils.get_column_letter(col[0].column)
-        ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
-        
-    file_stream = io.BytesIO()
-    wb.save(file_stream)
-    file_stream.seek(0)
-    
-    document = BufferedInputFile(file_stream.getvalue(), filename="xarajatlar_hisoboti.xlsx")
-    
-    await message.answer_document(
-        document=document,
-        caption="📊 Mana sizning barcha xarajatlaringiz jamlangan **Excel hisobot** faylingiz!",
-        parse_mode="Markdown"
-    )
-
-@router.message(Command("pdf"))
-async def cmd_pdf_report(message: types.Message):
-    user_id = message.from_user.id
-    
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT c.name, e.item_name, e.amount, e.date, e.time, e.payment_type 
-        FROM expenses e
-        JOIN categories c ON e.category_id = c.id
-        WHERE e.user_id = ?
-        ORDER BY e.date DESC, e.time DESC
-    ''', (user_id,))
-    rows = cursor.fetchall()
-    conn.close()
-    
-    if not rows:
-        await message.answer("⚠️ PDF hisobot yaratish uchun xarajatlar tarixi topilmadi.")
-        return
-        
-    file_stream = io.BytesIO()
-    doc = SimpleDocTemplate(file_stream, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
-    story = []
-    
-    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    if os.path.exists(font_path):
-        pdfmetrics.registerFont(TTFont('DejaVu', font_path))
-        font_name = 'DejaVu'
+    if period == "oylik":
+        tz = pytz.timezone("Asia/Tashkent")
+        current_year_month = datetime.now(tz).strftime("%Y-%m")
+        cursor.execute('''
+            SELECT c.name, e.item_name, e.amount, e.date, e.time, e.payment_type 
+            FROM expenses e
+            JOIN categories c ON e.category_id = c.id
+            WHERE e.user_id = ? AND e.date LIKE ?
+            ORDER BY e.date DESC, e.time DESC
+        ''', (user_id, f"{current_year_month}%"))
+        title = f"Oylik hisobot ({current_year_month})"
+        include_chart = False
     else:
-        font_name = 'Helvetica'
+        cursor.execute('''
+            SELECT c.name, e.item_name, e.amount, e.date, e.time, e.payment_type 
+            FROM expenses e
+            JOIN categories c ON e.category_id = c.id
+            WHERE e.user_id = ?
+            ORDER BY e.date DESC, e.time DESC
+        ''', (user_id,))
+        title = "Umumiy xisobot"
+        include_chart = True
         
-    styles = getSampleStyleSheet()
-    title_style = ParagraphStyle(
-        'TitleStyle',
-        parent=styles['Heading1'],
-        fontName=font_name,
-        fontSize=16,
-        alignment=1,
-        spaceAfter=20
-    )
+    rows = cursor.fetchall()
+    conn.close()
     
-    cell_style = ParagraphStyle(
-        'CellStyle',
-        parent=styles['Normal'],
-        fontName=font_name,
-        fontSize=10
-    )
+    if not rows:
+        await callback.answer("⚠️ Bu davr uchun xarajatlar topilmadi.", show_alert=True)
+        return
+        
+    await callback.message.edit_text(f"⏳ {title} tayyorlanmoqda. Iltimos, kuting...")
     
-    header_style = ParagraphStyle(
-        'HeaderStyle',
-        parent=styles['Normal'],
-        fontName=font_name,
-        fontSize=10,
-        textColor=colors.whitesmoke,
-        alignment=1
-    )
+    # --- EXCEL YASASH ---
+    if file_type == "excel":
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Hisobot"
+        
+        headers = ["Kategoriya", "Nomi / Tavsif", "Summa (so'm)", "To'lov turi", "Sana", "Vaqt"]
+        ws.append(headers)
+        
+        header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
+        align_center = Alignment(horizontal="center", vertical="center")
+        align_right = Alignment(horizontal="right", vertical="center")
+        
+        for col_num in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col_num)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = align_center
+            
+        for row_data in rows:
+            cat_name, item_name, amount, date_val, time_val, pay_type = row_data
+            pay_label = "Plastik" if pay_type == "card" else "Naqd"
+            ws.append([cat_name, item_name, amount, pay_label, date_val, time_val])
+            
+        thin_border = Border(
+            left=Side(style='thin', color='D9D9D9'),
+            right=Side(style='thin', color='D9D9D9'),
+            top=Side(style='thin', color='D9D9D9'),
+            bottom=Side(style='thin', color='D9D9D9')
+        )
+        
+        for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=6):
+            for cell in row:
+                cell.border = thin_border
+                if cell.column == 3:
+                    cell.number_format = '#,##0'
+                    cell.alignment = align_right
+                else:
+                    cell.alignment = Alignment(horizontal="left", vertical="center")
+                    
+        for col in ws.columns:
+            max_len = max(len(str(cell.value or '')) for cell in col)
+            col_letter = openpyxl.utils.get_column_letter(col[0].column)
+            ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
+            
+        if include_chart:
+            chart_buf = generate_pie_chart(rows)
+            img = ExcelImage(chart_buf)
+            ws.add_image(img, "H2") # Diagrammani H2 katakchasiga qo'yamiz
+            
+        file_stream = io.BytesIO()
+        wb.save(file_stream)
+        file_stream.seek(0)
+        
+        document = BufferedInputFile(file_stream.getvalue(), filename=f"{title.replace(' ', '_')}.xlsx")
+        await callback.message.delete()
+        await callback.message.answer_document(
+            document=document,
+            caption=f"📊 Mana sizning <b>{title}ingiz (Excel)</b>!",
+            parse_mode="HTML"
+        )
 
-    story.append(Paragraph("<b>Xarajatlar tarixi (Hisobot)</b>", title_style))
-    story.append(Spacer(1, 10))
-    
-    table_data = [[
-        Paragraph("<b>Kategoriya</b>", header_style),
-        Paragraph("<b>Nomi</b>", header_style),
-        Paragraph("<b>Summa</b>", header_style),
-        Paragraph("<b>To'lov</b>", header_style),
-        Paragraph("<b>Sana / Vaqt</b>", header_style)
-    ]]
-    
-    total_sum = 0
-    for row_data in rows:
-        cat_name, item_name, amount, date_val, time_val, pay_type = row_data
-        pay_label = "Plastik" if pay_type == "card" else "Naqd"
-        total_sum += amount
+    # --- PDF YASASH ---
+    elif file_type == "pdf":
+        file_stream = io.BytesIO()
+        doc = SimpleDocTemplate(file_stream, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+        story = []
         
-        table_data.append([
-            Paragraph(str(cat_name), cell_style),
-            Paragraph(str(item_name), cell_style),
-            Paragraph(f"{int(amount):,} so'm", cell_style),
-            Paragraph(pay_label, cell_style),
-            Paragraph(f"{date_val} {time_val}", cell_style)
-        ])
+        font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+        if os.path.exists(font_path):
+            pdfmetrics.registerFont(TTFont('DejaVu', font_path))
+            font_name = 'DejaVu'
+        else:
+            font_name = 'Helvetica'
+            
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle('TitleStyle', parent=styles['Heading1'], fontName=font_name, fontSize=16, alignment=1, spaceAfter=20)
+        cell_style = ParagraphStyle('CellStyle', parent=styles['Normal'], fontName=font_name, fontSize=10)
+        header_style = ParagraphStyle('HeaderStyle', parent=styles['Normal'], fontName=font_name, fontSize=10, textColor=colors.whitesmoke, alignment=1)
+
+        story.append(Paragraph(f"<b>{title}</b>", title_style))
+        story.append(Spacer(1, 10))
         
-    t = Table(table_data, colWidths=[100, 140, 90, 70, 100])
-    t.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#4F81BD")),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-        ('TOPPADDING', (0, 0), (-1, 0), 8),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#D9D9D9")),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F9F9F9")]),
-    ]))
-    
-    story.append(t)
-    story.append(Spacer(1, 15))
-    
-    summary_style = ParagraphStyle(
-        'SummaryStyle',
-        parent=styles['Normal'],
-        fontName=font_name,
-        fontSize=12,
-        alignment=2
-    )
-    story.append(Paragraph(f"<b>Jami xarajat: {int(total_sum):,} so'm</b>", summary_style))
-    
-    doc.build(story)
-    file_stream.seek(0)
-    
-    document = BufferedInputFile(file_stream.getvalue(), filename="xarajatlar_hisoboti.pdf")
-    
-    await message.answer_document(
-        document=document,
-        caption="📄 Mana sizning barcha xarajatlaringiz jamlangan **PDF hisobot** faylingiz!",
-        parse_mode="Markdown"
-    )
+        table_data = [[
+            Paragraph("<b>Kategoriya</b>", header_style),
+            Paragraph("<b>Nomi</b>", header_style),
+            Paragraph("<b>Summa</b>", header_style),
+            Paragraph("<b>To'lov</b>", header_style),
+            Paragraph("<b>Sana / Vaqt</b>", header_style)
+        ]]
+        
+        total_sum = 0
+        for row_data in rows:
+            cat_name, item_name, amount, date_val, time_val, pay_type = row_data
+            pay_label = "Plastik" if pay_type == "card" else "Naqd"
+            total_sum += amount
+            
+            table_data.append([
+                Paragraph(str(cat_name), cell_style),
+                Paragraph(str(item_name), cell_style),
+                Paragraph(f"{int(amount):,} so'm", cell_style),
+                Paragraph(pay_label, cell_style),
+                Paragraph(f"{date_val} {time_val}", cell_style)
+            ])
+            
+        t = Table(table_data, colWidths=[100, 140, 90, 70, 100])
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#4F81BD")),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+            ('TOPPADDING', (0, 0), (-1, 0), 8),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#D9D9D9")),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F9F9F9")]),
+        ]))
+        
+        story.append(t)
+        story.append(Spacer(1, 15))
+        
+        summary_style = ParagraphStyle('SummaryStyle', parent=styles['Normal'], fontName=font_name, fontSize=12, alignment=2)
+        story.append(Paragraph(f"<b>Jami xarajat: {int(total_sum):,} so'm</b>", summary_style))
+        story.append(Spacer(1, 20))
+        
+        if include_chart:
+            chart_buf = generate_pie_chart(rows)
+            img = RLImage(chart_buf, width=400, height=400)
+            img.hAlign = 'CENTER'
+            story.append(img)
+            
+        doc.build(story)
+        file_stream.seek(0)
+        
+        document = BufferedInputFile(file_stream.getvalue(), filename=f"{title.replace(' ', '_')}.pdf")
+        
+        await callback.message.delete()
+        await callback.message.answer_document(
+            document=document,
+            caption=f"📄 Mana sizning <b>{title}ingiz (PDF)</b>!",
+            parse_mode="HTML"
+        )
+
 
 # ================= 3. XARAJATLARNI MATNDAN O'QISH VA TANLOV =================
 
@@ -676,7 +680,6 @@ async def process_text_message(message: types.Message, state: FSMContext):
                 
                 line_total = qty * price
                 item_full_name = f"{name} {qty} {unit}"
-
                 cat_name = determine_category(name)
                 cat_id = cat_dict.get(cat_name.lower(), 1)
 
@@ -753,6 +756,7 @@ async def process_text_message(message: types.Message, state: FSMContext):
 
     await message.answer(preview_text, parse_mode="HTML", reply_markup=keyboard)
 
+
 # ================= 4. XARAJATNI TASDIQLASH (CALLBACK) =================
 
 @router.callback_query(StateFilter(FSM.expense_choice), F.data.in_({"exp_card", "exp_cash", "exp_cancel"}))
@@ -823,37 +827,27 @@ async def main():
     init_db()
     seed_default_categories()
 
+    # Baza ustunlarini tekshirish (xatoliklarni oldini olish uchun)
     conn = get_connection()
     cursor = conn.cursor()
-    
     try: cursor.execute("ALTER TABLE users ADD COLUMN card_balance REAL DEFAULT 0")
     except Exception: pass
-    
     try: cursor.execute("ALTER TABLE users ADD COLUMN cash_balance REAL DEFAULT 0")
     except Exception: pass
-    
     try: cursor.execute("ALTER TABLE users ADD COLUMN last_income REAL DEFAULT 0")
     except Exception: pass
-    
     try: cursor.execute("ALTER TABLE users ADD COLUMN last_income_type TEXT DEFAULT 'cash'")
     except Exception: pass
-
     try: cursor.execute("ALTER TABLE expenses ADD COLUMN payment_type TEXT DEFAULT 'cash'")
     except Exception: pass
-
     conn.commit()
     conn.close()
 
-    # Middleware-ni ulash
-    dp.message.outer_middleware(AutoDeleteMiddleware())
-
-    # Routerni Dispatcherga ulash
+    dp.message.middleware(AutoDeleteMiddleware())
     dp.include_router(router)
-
-    # Bot buyruqlar menyusini o'rnatish
+    
     await set_bot_commands(bot)
-
-    # Eskirgan xabarlarni o'chirib tashlab, pollingni boshlash
+    logging.info("Bot ishga tushdi...")
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
