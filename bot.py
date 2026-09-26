@@ -5,7 +5,8 @@ import re
 import io
 from datetime import datetime, timedelta
 import pytz
-from aiogram import Bot, Dispatcher, F, Router, types
+
+from aiogram import Bot, Dispatcher, F, Router, types, BaseMiddleware
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -21,7 +22,7 @@ from reportlab.lib import colors
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-# DB faylidan funksiyalarni import qilish
+# Baza bilan ishlash funksiyalarini import qilish
 from app.database.db import (
     init_db,
     add_user,
@@ -39,6 +40,16 @@ if not TOKEN:
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 router = Router()
+
+# --- AVTOMATIK XABAR VA BUYRUQLARNI O'CHIRISH MIDDLEWARE ---
+class AutoDeleteMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        if isinstance(event, types.Message):
+            try:
+                await event.delete()
+            except Exception:
+                pass  # Telegramda xabarni o'chirish huquqi yetmasda bot to'xtab qolmaydi
+        return await handler(event, data)
 
 class FSM(StatesGroup):
     income_amount = State()
@@ -61,7 +72,7 @@ async def set_bot_commands(bot: Bot):
     ]
     await bot.set_my_commands(commands)
 
-# --- STANDARD KATEGORIYALARni BAZAGA QO'SHISH ---
+# --- STANDARD KATEGORIYALARNI BAZAGA QO'SHISH ---
 def seed_default_categories():
     categories = ["Magazin", "Zapravka", "Apteka", "Stroy magazin", "Boshqa"]
     conn = get_connection()
@@ -177,12 +188,6 @@ async def process_income_choice(callback: types.CallbackQuery, state: FSMContext
 
 @router.message(StateFilter(FSM.income_amount), F.text)
 async def process_income_amount(message: types.Message, state: FSMContext):
-    # Foydalanuvchi kiritgan raqamli xabarni avtomatik o'chiramiz
-    try:
-        await message.delete()
-    except Exception:
-        pass
-
     text = re.sub(r'\s+', '', message.text)
 
     if text.isdigit():
@@ -630,12 +635,6 @@ async def process_text_message(message: types.Message, state: FSMContext):
     if message.text.startswith('/'):
         return
 
-    # Foydalanuvchi yozgan matnni avtomatik o'chirib tashlaymiz
-    try:
-        await message.delete()
-    except Exception:
-        pass
-
     user_id = message.from_user.id
     add_user(user_id)
     lines = message.text.strip().split('\n')
@@ -844,6 +843,9 @@ async def main():
 
     conn.commit()
     conn.close()
+
+    # Barcha kelgan xabar va buyruqlarni avtomatik o'chirish middleware'ini ulash
+    dp.message.outer_middleware(AutoDeleteMiddleware())
 
     dp.include_router(router)
     await bot.delete_webhook(drop_pending_updates=True)
