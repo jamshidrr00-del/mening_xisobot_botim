@@ -844,18 +844,18 @@ async def main():
     conn.commit()
     conn.close()
 
-    # Barcha kelgan xabar va buyruqlarni avtomatik o'chirish middleware'ini ulash
+    # Middleware-ni ulash
     dp.message.outer_middleware(AutoDeleteMiddleware())
 
+    # Routerni Dispatcherga ulash
     dp.include_router(router)
-    await bot.delete_webhook(drop_pending_updates=True)
+
+    # Bot buyruqlar menyusini o'rnatish
     await set_bot_commands(bot)
-    
-    logging.info("Telegram bot ishga tushdi...")
+
+    # Eskirgan xabarlarni o'chirib tashlab, pollingni boshlash
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logging.info("Bot to'xtatildi.")
+    asyncio.run(main())
