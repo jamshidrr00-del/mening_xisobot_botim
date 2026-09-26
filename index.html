@@ -3,102 +3,214 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hisobotlar</title>
+    <title>Kunlik Xisobot Paneli</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
+        :root {
+            --bg-color: #17212b;
+            --card-bg: #242f3d;
+            --input-bg: #0e1621;
+            --text-color: #ffffff;
+            --text-muted: #7f91a4;
+            --accent-green: #4cd964;
+            --accent-red: #ff3b30;
+            --accent-blue: #5288c1;
+            --border-color: #2b394a;
+        }
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            text-align: center;
-            padding: 20px;
-            background-color: var(--tg-theme-bg-color, #f4f6f9);
-            color: var(--tg-theme-text-color, #333);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
             margin: 0;
-        }
-        h2 { margin-bottom: 25px; }
-        .btn {
-            display: block;
-            width: 100%;
-            padding: 16px;
-            margin: 12px 0;
-            font-size: 16px;
-            font-weight: bold;
-            border: none;
-            border-radius: 12px;
-            background-color: var(--tg-theme-button-color, #0088cc);
-            color: var(--tg-theme-button-text-color, #ffffff);
-            cursor: pointer;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            transition: 0.2s;
-        }
-        .btn:active { transform: scale(0.98); }
-        .format-box {
-            display: none;
-            margin-top: 30px;
-            padding: 20px;
-            border-radius: 15px;
-            background-color: #ffffff;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
-        }
-        .format-btn {
-            width: 45%;
             padding: 15px;
-            margin: 10px 2%;
-            font-size: 16px;
-            font-weight: bold;
-            cursor: pointer;
-            border: none;
-            border-radius: 10px;
-            display: inline-block;
         }
-        .pdf-btn { background-color: #e74c3c; color: white; }
-        .excel-btn { background-color: #27ae60; color: white; }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .header h2 {
+            margin: 0;
+            font-size: 20px;
+        }
+
+        /* 3 ta asosiy tugma uslubi */
+        .nav-buttons {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 20px;
+        }
+        .nav-btn {
+            flex: 1;
+            padding: 12px 5px;
+            border: 1px solid var(--border-color);
+            background: var(--card-bg);
+            color: var(--text-color);
+            border-radius: 10px;
+            font-weight: bold;
+            font-size: 13px;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.2s ease;
+        }
+        .nav-btn.active {
+            background: var(--accent-blue);
+            border-color: var(--accent-blue);
+            color: #fff;
+        }
+        .nav-btn.btn-kirim.active {
+            background: var(--accent-green);
+            border-color: var(--accent-green);
+        }
+        .nav-btn.btn-chiqim.active {
+            background: var(--accent-red);
+            border-color: var(--accent-red);
+        }
+
+        /* Forma va kartalar */
+        .tab-content {
+            display: none;
+            background: var(--card-bg);
+            padding: 15px;
+            border-radius: 12px;
+        }
+        .tab-content.active {
+            display: block;
+        }
+
+        .form-group {
+            margin-bottom: 12px;
+        }
+        label {
+            display: block;
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+        }
+        input {
+            width: 100%;
+            padding: 12px;
+            background: var(--input-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: #fff;
+            font-size: 14px;
+            box-sizing: border-box;
+            outline: none;
+        }
+        
+        .btn-submit {
+            width: 100%;
+            padding: 12px;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: bold;
+            font-size: 15px;
+            cursor: pointer;
+            margin-top: 5px;
+        }
+        .btn-submit-kirim { background: var(--accent-green); }
+        .btn-submit-chiqim { background: var(--accent-red); }
+
+        /* Tranzaksiyalar ro'yxati */
+        .transaction-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .transaction-item:last-child {
+            border-bottom: none;
+        }
+        .green { color: var(--accent-green); }
+        .red { color: var(--accent-red); }
     </style>
 </head>
 <body>
 
-    <h2>📊 Kerakli hisobotni tanlang</h2>
-    
-    <button class="btn" onclick="askFormat('haftalik')">📅 Haftalik hisobot</button>
-    <button class="btn" onclick="askFormat('oylik')">📆 Oylik hisobot</button>
-    <button class="btn" onclick="askFormat('barcha')">📈 Barcha hisobotlar (Diagramma bilan)</button>
+    <div class="header">
+        <h2>📊 Kunlik Xisobot Paneli</h2>
+    </div>
 
-    <div id="formatBox" class="format-box">
-        <h3 id="reportTitle">Hisobot</h3>
-        <p>Qaysi formatda yuklab olmoqchisiz?</p>
-        <button class="format-btn pdf-btn" onclick="sendReportRequest('pdf')">📕 PDF</button>
-        <button class="format-btn excel-btn" onclick="sendReportRequest('excel')">📗 Excel</button>
+    <!-- 3 TA ASOSIY TUGMA -->
+    <div class="nav-buttons">
+        <button class="nav-btn btn-kirim active" onclick="showTab('kirim-tab', this)">📥 Kirim</button>
+        <button class="nav-btn btn-chiqim" onclick="showTab('chiqim-tab', this)">📤 Chiqim</button>
+        <button class="nav-btn" onclick="showTab('hisobot-tab', this)">📊 Hisobot</button>
+    </div>
+
+    <!-- 1-TUGMA: KIRIM QO'SHISH -->
+    <div id="kirim-tab" class="tab-content active">
+        <h3 style="margin-top:0; font-size: 15px; color: var(--accent-green);">📥 Kirim qo'shish</h3>
+        <form action="/add" method="POST">
+            <input type="hidden" name="type" value="kirim">
+            <div class="form-group">
+                <label>Summa (so'm):</label>
+                <input type="number" name="amount" placeholder="Masalan: 100000" required>
+            </div>
+            <div class="form-group">
+                <label>Izoh / Manbaa:</label>
+                <input type="text" name="description" placeholder="Masalan: Oylik, Mijozdan to'lov" required>
+            </div>
+            <button type="submit" class="btn-submit btn-submit-kirim">Kirimni saqlash</button>
+        </form>
+    </div>
+
+    <!-- 2-TUGMA: CHIQIM QO'SHISH -->
+    <div id="chiqim-tab" class="tab-content">
+        <h3 style="margin-top:0; font-size: 15px; color: var(--accent-red);">📤 Chiqim qo'shish</h3>
+        <form action="/add" method="POST">
+            <input type="hidden" name="type" value="chiqim">
+            <div class="form-group">
+                <label>Summa (so'm):</label>
+                <input type="number" name="amount" placeholder="Masalan: 25000" required>
+            </div>
+            <div class="form-group">
+                <label>Izoh / Kategoriya:</label>
+                <input type="text" name="description" placeholder="Masalan: Bozor, Tushlik, Yoqilg'i" required>
+            </div>
+            <button type="submit" class="btn-submit btn-submit-chiqim">Chiqimni saqlash</button>
+        </form>
+    </div>
+
+    <!-- 3-TUGMA: HISOBOT (OXIRGI AMALLAR) -->
+    <div id="hisobot-tab" class="tab-content">
+        <h3 style="margin-top:0; font-size: 15px;">📋 Oxirgi amallar</h3>
+        {% if transactions %}
+            {% for row in transactions %}
+                <div class="transaction-item">
+                    <div>
+                        <strong>{{ row['description'] }}</strong>
+                        <div style="font-size: 11px; color: var(--text-muted);">{{ row['type']|capitalize }}</div>
+                    </div>
+                    <div class="{{ 'green' if row['type'] == 'kirim' else 'red' }}" style="font-weight: bold;">
+                        {{ '+' if row['type'] == 'kirim' else '-' }}{{ "{:,.0f}".format(row['amount']) }} so'm
+                    </div>
+                </div>
+            {% endfor %}
+        {% else %}
+            <p style="color: var(--text-muted); font-size: 13px; margin: 0;">Hozircha amallar mavjud emas.</p>
+        {% endif %}
     </div>
 
     <script>
-        let selectedReport = "";
-        const tg = window.Telegram.WebApp;
-        tg.expand(); // Ekranni to'liq ochish
+        function showTab(tabId, btnElement) {
+            // Barcha tablarni yashirish
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            // Barcha tugmalardan active klassini olib tashlash
+            document.querySelectorAll('.nav-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
 
-        function askFormat(type) {
-            selectedReport = type;
-            document.getElementById('formatBox').style.display = 'block';
-            
-            let title = "";
-            if(type === 'haftalik') title = "Haftalik hisobot";
-            if(type === 'oylik') title = "Oylik hisobot";
-            if(type === 'barcha') title = "Barcha hisobotlar";
-            
-            document.getElementById('reportTitle').innerText = title;
-            
-            // Format tanlash qismiga sekin tushish
-            document.getElementById('formatBox').scrollIntoView({ behavior: 'smooth' });
-        }
-
-        function sendReportRequest(format) {
-            let data = {
-                action: "get_report",
-                report_type: selectedReport,
-                format: format
-            };
-            // Tanlovni Telegram botga jo'natish
-            tg.sendData(JSON.stringify(data));
-            tg.close(); // Mini App'ni yopish
+            // Tanlangan tab va tugmani faollashtirish
+            document.getElementById(tabId).classList.add('active');
+            btnElement.classList.add('active');
         }
     </script>
+
 </body>
 </html>
